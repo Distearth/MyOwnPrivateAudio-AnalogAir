@@ -19,10 +19,14 @@ try:
     import audioop
 except ModuleNotFoundError:
     try:
-        import pyaudioop as audioop
+        import audioop_lts as audioop
         sys.modules['audioop'] = audioop
     except ImportError:
-        pass
+        try:
+            import pyaudioop as audioop
+            sys.modules['audioop'] = audioop
+        except ImportError:
+            pass
 
 import wave
 import numpy as np

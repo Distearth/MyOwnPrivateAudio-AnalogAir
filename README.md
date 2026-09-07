@@ -51,7 +51,7 @@ chmod +x install.sh
 ### What the installer handles automatically:
 - Installs audio architecture packages: `pipewire`, `wireplumber`, `pipewire-pulse`, `alsa-utils`, `ffmpeg`, `pulseaudio-utils`, and `pavucontrol`.
 - Configures the official OwnTone repository, keyring, and sets up the lossless FIFO turntable pipe at `~/Music/AnalogAir/AnalogAir`.
-- Creates an isolated Python virtual environment with Python 3.13 compatibility (`pyaudioop`, `shazamio`, `sounddevice`, `numpy`).
+- Creates an isolated Python virtual environment with Python 3.13 compatibility (`audioop-lts`, `shazamio`, `sounddevice`, `numpy`).
 - Deploys the systemd services (`analogair-capture.service`, `analogair-daemon.service`, `analogair-web.service`) and enables lingering so background playback starts automatically on boot.
 
 ---

@@ -282,7 +282,9 @@ echo -e "${{YELLOW}}[6/7] Setting up Metadata Daemon & Web UI${{NC}}"
 VENV_PATH="$USER_HOME/.config/analogair/venv"
 python3 -m venv "$VENV_PATH" --system-site-packages
 "$VENV_PATH/bin/pip" install --upgrade pip
-"$VENV_PATH/bin/pip" install pyaudioop shazamio sounddevice numpy requests pillow aiohttp
+# For Python 3.13+, PEP 594 removed audioop from the standard library.
+# audioop-lts provides the official long-term support build on PyPI for Python 3.13+.
+"$VENV_PATH/bin/pip" install audioop-lts shazamio sounddevice numpy requests pillow aiohttp
 
 # Copy or write AnalogAir Daemon script
 if [ -f "$SCRIPT_DIR/scripts/analogair_daemon.py" ]; then
