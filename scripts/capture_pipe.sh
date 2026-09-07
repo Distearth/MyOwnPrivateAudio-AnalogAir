@@ -10,11 +10,12 @@ mkdir -p "$MUSIC_DIR"
 
 echo "[AnalogAir Capture] Streaming turntable audio into FIFO pipe: $PIPE"
 
-# Query Tone EQ and Preamp settings from AnalogAir database
+# Query Tone EQ, Preamp, and Audio Device settings from AnalogAir database
 DB="$HOME/.config/analogair/settings.db"
 BASS=$(sqlite3 "$DB" "SELECT value FROM settings WHERE key='bass_gain_db';" 2>/dev/null || echo "0")
 MID=$(sqlite3 "$DB" "SELECT value FROM settings WHERE key='mid_gain_db';" 2>/dev/null || echo "0")
 TREBLE=$(sqlite3 "$DB" "SELECT value FROM settings WHERE key='treble_gain_db';" 2>/dev/null || echo "0")
+SELECTED_DEV=$(sqlite3 "$DB" "SELECT value FROM settings WHERE key='audio_device';" 2>/dev/null || echo "")
 
 BASS="${BASS:-0}"
 MID="${MID:-0}"
@@ -23,20 +24,31 @@ TREBLE="${TREBLE:-0}"
 # Build real-time 3-band shelf equalizer filter graph (as in vinyl-airplay & professional audio DSP)
 EQ_FILTER="bass=g=${BASS}:f=100,equalizer=f=1000:width_type=q:w=1:g=${MID},treble=g=${TREBLE}:f=8000"
 
-echo "[AnalogAir Capture] Tone DSP Active: Bass=${BASS}dB, Mid=${MID}dB, Treble=${TREBLE}dB"
+echo "[AnalogAir Capture] Tone DSP Active: Bass=${BASS}dB, Mid=${MID}dB, Treble=${TREBLE}dB (Target Device: ${SELECTED_DEV:-Auto-Detect})"
 
-# Find ALSA card for direct hardware or Pulse fallback
-ALSA_CARD=$(arecord -l 2>/dev/null | grep -i -E "cx231xx|usb|codec|audio|turntable" | head -n1 | sed -n 's/card \([0-9]\+\):.*/\1/p')
+# Determine ALSA and Pulse targets based on user selection or auto-detection
 ALSA_DEV="default"
-if [ -n "$ALSA_CARD" ]; then
-    ALSA_DEV="plughw:$ALSA_CARD,0"
+PULSE_DEV="default"
+
+if [ -n "$SELECTED_DEV" ] && [ "$SELECTED_DEV" != "default" ] && [ "$SELECTED_DEV" != "@DEFAULT_SOURCE@" ]; then
+    if [[ "$SELECTED_DEV" =~ ^hw: || "$SELECTED_DEV" =~ ^plughw: ]]; then
+        ALSA_DEV="$SELECTED_DEV"
+    else
+        PULSE_DEV="$SELECTED_DEV"
+    fi
+else
+    # Auto-detect USB turntable / soundcard if none explicitly selected
+    ALSA_CARD=$(arecord -l 2>/dev/null | grep -i -E "cx231xx|usb|codec|audio|turntable" | head -n1 | sed -n 's/card \([0-9]\+\):.*/\1/p')
+    if [ -n "$ALSA_CARD" ]; then
+        ALSA_DEV="plughw:$ALSA_CARD,0"
+    fi
 fi
 
 # 1. Primary: FFmpeg with real-time 3-band EQ filter graph
 if command -v ffmpeg >/dev/null 2>&1; then
-    # Try pulse first (respects pactl input volume / pavucontrol)
+    # If PulseAudio / PipeWire is running, capture via pulse
     if pactl info >/dev/null 2>&1; then
-        exec ffmpeg -loglevel error -f pulse -i default -af "$EQ_FILTER" -f s16le -ar 44100 -ac 2 - > "$PIPE"
+        exec ffmpeg -loglevel error -f pulse -i "$PULSE_DEV" -af "$EQ_FILTER" -f s16le -ar 44100 -ac 2 - > "$PIPE"
     else
         exec ffmpeg -loglevel error -f alsa -i "$ALSA_DEV" -af "$EQ_FILTER" -f s16le -ar 44100 -ac 2 - > "$PIPE"
     fi

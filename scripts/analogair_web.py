@@ -153,8 +153,44 @@ async def get_tone(request):
         for row in conn.execute("SELECT key, value FROM settings"):
             settings[row["key"]] = row["value"]
 
-    # Detect devices via arecord
-    devices = []
+    # Detect devices via pactl sources first (for PipeWire/Pulse friendly names), and arecord -l as fallback
+    devices = [{
+        "id": "@DEFAULT_SOURCE@",
+        "name": "PipeWire Auto-Select / Default Source",
+        "cardIndex": 0,
+        "supportedRates": [44100, 48000],
+        "isDefault": True,
+        "channels": 2
+    }]
+
+    # 1. PipeWire / PulseAudio sources via pactl
+    try:
+        res = subprocess.run(["pactl", "list", "sources"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        current_name = None
+        current_desc = None
+        for line in res.stdout.splitlines():
+            line_str = line.strip()
+            if line_str.startswith("Name:"):
+                current_name = line_str.split(":", 1)[1].strip()
+            elif line_str.startswith("Description:"):
+                current_desc = line_str.split(":", 1)[1].strip()
+                if current_name and not current_name.endswith(".monitor"):
+                    # Avoid duplicate default
+                    if not any(d["id"] == current_name for d in devices):
+                        devices.append({
+                            "id": current_name,
+                            "name": current_desc or current_name,
+                            "cardIndex": len(devices),
+                            "supportedRates": [44100, 48000],
+                            "isDefault": False,
+                            "channels": 2
+                        })
+                current_name = None
+                current_desc = None
+    except Exception:
+        pass
+
+    # 2. ALSA hardware cards via arecord -l
     try:
         res = subprocess.run(["arecord", "-l"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         for line in res.stdout.splitlines():
@@ -162,42 +198,27 @@ async def get_tone(request):
                 m = re.match(r"card\s+(\d+):\s+([^,]+),\s+device\s+(\d+):\s+(.*)", line)
                 if m:
                     card_num, card_name, dev_num, dev_desc = m.groups()
-                    devices.append({
-                        "id": f"hw:{card_num},{dev_num}",
-                        "name": f"{card_name.strip()} ({dev_desc.strip()})",
-                        "cardIndex": int(card_num),
-                        "supportedRates": [44100, 48000],
-                        "isDefault": (len(devices) == 0),
-                        "channels": 2
-                    })
-                else:
-                    devices.append({
-                        "id": line.strip(),
-                        "name": line.strip(),
-                        "cardIndex": 0,
-                        "supportedRates": [44100],
-                        "isDefault": (len(devices) == 0),
-                        "channels": 2
-                    })
+                    hw_id = f"hw:{card_num},{dev_num}"
+                    if not any(d["id"] == hw_id for d in devices):
+                        devices.append({
+                            "id": hw_id,
+                            "name": f"ALSA Direct: {card_name.strip()} ({dev_desc.strip()})",
+                            "cardIndex": int(card_num),
+                            "supportedRates": [44100, 48000],
+                            "isDefault": False,
+                            "channels": 2
+                        })
     except Exception:
         pass
 
-    if not devices:
-        devices = [{
-            "id": "@DEFAULT_SOURCE@",
-            "name": "PipeWire Auto-Select / Default Source",
-            "cardIndex": 0,
-            "supportedRates": [44100, 48000],
-            "isDefault": True,
-            "channels": 2
-        }]
+    saved_dev = settings.get("audio_device", "@DEFAULT_SOURCE@")
 
     return web.json_response({
         "inputGainDb": float(settings.get("input_gain_db", 0)),
         "bassGainDb": float(settings.get("bass_gain_db", 1.5)),
         "midGainDb": float(settings.get("mid_gain_db", 0)),
         "trebleGainDb": float(settings.get("treble_gain_db", 0.5)),
-        "selectedDeviceId": settings.get("audio_device", devices[0]["id"] if devices else "default"),
+        "selectedDeviceId": saved_dev,
         "deviceList": devices
     })
 
@@ -213,40 +234,60 @@ async def save_tone(request):
                     "trebleGainDb": "treble_gain_db"
                 }[k]
                 conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (db_key, str(data[k])))
+        if "selectedDeviceId" in data:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('audio_device', ?)", (str(data["selectedDeviceId"]),))
         conn.commit()
 
-    # Apply Input Preamp Gain directly to PipeWire / PulseAudio using pactl (same backend as pavucontrol)
+    selected_dev = data.get("selectedDeviceId")
+    if not selected_dev:
+        with get_db() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key='audio_device'").fetchone()
+            if row:
+                selected_dev = row["value"]
+
+    # Apply Input Preamp Gain directly to the selected or default PipeWire / PulseAudio source
     if "inputGainDb" in data:
         try:
             gain_db = float(data["inputGainDb"])
             # 0 dB = 100%, +6 dB ≈ 200%, -6 dB ≈ 50%, +12 dB ≈ 400%
             vol_pct = max(0, min(400, int(round(100.0 * (10.0 ** (gain_db / 20.0))))))
+            
+            # 1. Set default source volume
             subprocess.run(["pactl", "set-source-volume", "@DEFAULT_SOURCE@", f"{vol_pct}%"], 
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            # Target specific Conexant / USB audio capture card in pactl
-            res = subprocess.run(["pactl", "list", "sources", "short"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-            for line in res.stdout.splitlines():
-                parts = line.split()
-                if len(parts) >= 2:
-                    src_name = parts[1]
-                    if any(k in src_name.lower() for k in ["cx231xx", "usb", "input", "analog"]):
-                        subprocess.run(["pactl", "set-source-volume", src_name, f"{vol_pct}%"], 
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # 2. If a specific device is selected, set its volume directly
+            if selected_dev and selected_dev not in ["@DEFAULT_SOURCE@", "default"]:
+                subprocess.run(["pactl", "set-source-volume", selected_dev, f"{vol_pct}%"], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            # Hardware ALSA level controls across detected capture cards
-            for card in ["0", "1", "2", "3"]:
-                for ctrl in ["Capture", "Line", "Mic"]:
-                    subprocess.run(["amixer", "-c", card, "sset", ctrl, f"{vol_pct}%"], 
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # 3. If it's an ALSA hw device (hw:X,Y), set ALSA mixer volume on card X
+            if selected_dev and selected_dev.startswith("hw:"):
+                try:
+                    card_idx = selected_dev.split(":")[1].split(",")[0]
+                    for ctrl in ["Capture", "Line", "Mic"]:
+                        subprocess.run(["amixer", "-c", card_idx, "sset", ctrl, f"{vol_pct}%"], 
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            else:
+                # Also apply to all detected capture cards in ALSA as general protection
+                for card in ["0", "1", "2", "3"]:
+                    for ctrl in ["Capture", "Line", "Mic"]:
+                        subprocess.run(["amixer", "-c", card, "sset", ctrl, f"{vol_pct}%"], 
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
 
-    # If tone equalizer changed, reload live capture stream to apply new DSP curve
-    if any(k in data for k in ["bassGainDb", "midGainDb", "trebleGainDb"]):
+    # If tone equalizer OR selected device changed, reload live capture stream to apply immediately
+    if any(k in data for k in ["bassGainDb", "midGainDb", "trebleGainDb", "selectedDeviceId"]):
         try:
             subprocess.run(["systemctl", "--user", "restart", "analogair-capture.service"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Also restart daemon so it monitors the newly chosen soundcard
+            if "selectedDeviceId" in data:
+                subprocess.run(["systemctl", "--user", "restart", "analogair-daemon.service"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
 
