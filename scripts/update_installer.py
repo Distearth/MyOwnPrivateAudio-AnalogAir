@@ -141,6 +141,7 @@ sudo apt-get install -y \\
   python3-numpy \\
   python3-pil \\
   pulseaudio-utils \\
+  pavucontrol \\
   libportaudio2 \\
   portaudio19-dev \\
   git \\
@@ -245,7 +246,11 @@ settings = {{
     'silence_gap': '15',
     'silence_threshold': '0.0035',
     'source_type': 'vinyl',
-    'continuous_id': 'false'
+    'continuous_id': 'false',
+    'input_gain_db': '0.0',
+    'bass_gain_db': '1.5',
+    'mid_gain_db': '0.0',
+    'treble_gain_db': '0.5'
 }}
 for k, v in settings.items():
     c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (k, v))
