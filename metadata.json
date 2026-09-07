@@ -1,0 +1,6 @@
+{
+  "name": "AnalogAir",
+  "description": "Smart vinyl audio streaming system with automatic album identification, PipeWire tone controls, AirPlay & OwnTone output management, and touchscreen display.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

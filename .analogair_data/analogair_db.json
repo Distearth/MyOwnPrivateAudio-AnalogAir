@@ -1,0 +1,96 @@
+{
+  "settings": {
+    "sourceType": "vinyl",
+    "customStreamLabel": "Vinyl Audio Streaming",
+    "defaultArtUrl": "/src/assets/images/analogair_idle_art_1788723997443.jpg",
+    "idleArtist": "Audio-Technica",
+    "idleAlbum": "AT-LP60X Turntable",
+    "idleTitle": "AnalogAir Vinyl Stream",
+    "continuousId": false,
+    "silenceGapSeconds": 20,
+    "dimMinutes": 25,
+    "idleFadeSeconds": 10,
+    "owntoneHost": "localhost",
+    "owntonePort": 3689,
+    "enableToneDsp": true
+  },
+  "tone": {
+    "inputGainDb": 0,
+    "bassGainDb": 0,
+    "midGainDb": 0,
+    "trebleGainDb": 0,
+    "selectedDeviceId": "usb_audio_codec_0"
+  },
+  "overrides": {
+    "Pink Floyd - Speak to Me": {
+      "trackKey": "Pink Floyd - Speak to Me",
+      "customArtist": "Pink Floyd",
+      "customAlbum": "The Dark Side of the Moon (Original 1973 Master)",
+      "customArtUrl": "https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=1000&q=80",
+      "releaseMbid": "a30f30c6-3023-3f18-be48-6a3f1246d7e0",
+      "format": "12\" Vinyl LP",
+      "year": "1973",
+      "updatedAt": "2026-09-04T19:50:11.945Z"
+    },
+    "Pink Floyd - Breathe (In the Air)": {
+      "trackKey": "Pink Floyd - Breathe (In the Air)",
+      "customArtist": "Pink Floyd",
+      "customAlbum": "The Dark Side of the Moon",
+      "customArtUrl": "https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=1000&q=80",
+      "releaseMbid": "a30f30c6-3023-3f18-be48-6a3f1246d7e0",
+      "format": "12\" Vinyl LP",
+      "year": "Release",
+      "updatedAt": "2026-09-06T22:48:04.009Z"
+    }
+  },
+  "sessions": [
+    {
+      "id": "sess-1788740848954",
+      "artist": "Miles Davis",
+      "album": "Kind of Blue (180g Vinyl Edition)",
+      "firstTrack": "Freddie Freeloader",
+      "artUrl": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1000&q=80",
+      "playedAt": "2026-09-07T00:27:28.954Z",
+      "playCount": 1,
+      "mbid": "4979e27c-fb8d-3687-b99b-4392949ff736",
+      "hasOverride": false
+    },
+    {
+      "id": "sess-1",
+      "artist": "Pink Floyd",
+      "album": "The Dark Side of the Moon (Original 1973 Master)",
+      "firstTrack": "Speak to Me",
+      "artUrl": "https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=1000&q=80",
+      "playedAt": "2026-09-06T21:15:17.350Z",
+      "playCount": 5,
+      "mbid": "a30f30c6-3023-3f18-be48-6a3f1246d7e0",
+      "hasOverride": true
+    },
+    {
+      "id": "sess-2",
+      "artist": "Miles Davis",
+      "album": "Kind of Blue",
+      "firstTrack": "So What",
+      "artUrl": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1000&q=80",
+      "playedAt": "2026-09-05T17:50:11.946Z",
+      "playCount": 7,
+      "mbid": "4979e27c-fb8d-3687-b99b-4392949ff736",
+      "hasOverride": false
+    },
+    {
+      "id": "sess-3",
+      "artist": "Fleetwood Mac",
+      "album": "Rumours",
+      "firstTrack": "Second Hand News",
+      "artUrl": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1000&q=80",
+      "playedAt": "2026-09-04T19:50:11.946Z",
+      "playCount": 2,
+      "mbid": "a6886e96-a81d-4074-b52a-33758b99ec69",
+      "hasOverride": false
+    }
+  ],
+  "favoriteSpeakers": [
+    "airplay_living_room",
+    "chromecast_den"
+  ]
+}
