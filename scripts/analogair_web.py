@@ -94,6 +94,7 @@ async def get_state(request):
     idle_title = settings.get("idle_title", "AnalogAir Vinyl")
 
     # Current playing info
+    has_daemon_state = bool(state)
     status = state.get("status", "idle")
     artist = state.get("artist", idle_artist)
     album = state.get("album", idle_album)
@@ -101,20 +102,21 @@ async def get_state(request):
     rms = state.get("rms", 0.0)
     matched_via = state.get("matched_via", "idle_default" if status == "idle" else "shazam")
 
-    # Check if OwnTone player is actively streaming the vinyl pipe to AirPlay
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(f"{OWNTONE_BASE}/api/player", timeout=1) as resp:
-                if resp.status == 200:
-                    pdata = await resp.json()
-                    if pdata.get("state") == "play":
-                        status = "playing"
-                        if title == idle_title:
-                            title = "Vinyl Playback"
-                        if matched_via == "idle_default":
-                            matched_via = "listening"
-        except Exception:
-            pass
+    # Only query OwnTone if daemon state is completely absent (daemon not yet started)
+    if not has_daemon_state:
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(f"{OWNTONE_BASE}/api/player", timeout=1) as resp:
+                    if resp.status == 200:
+                        pdata = await resp.json()
+                        if pdata.get("state") == "play":
+                            status = "playing"
+                            if title == idle_title:
+                                title = "Vinyl Playback"
+                            if matched_via == "idle_default":
+                                matched_via = "listening"
+            except Exception:
+                pass
 
     # Determine artwork URL
     art_url = "/api/artwork/current.jpg"
@@ -138,7 +140,7 @@ async def get_state(request):
             "bassGainDb": float(settings.get("bass_gain_db", 1.5)),
             "midGainDb": float(settings.get("mid_gain_db", 0)),
             "trebleGainDb": float(settings.get("treble_gain_db", 0.5)),
-            "selectedDeviceId": "default"
+            "selectedDeviceId": settings.get("audio_device", "default")
         },
         "settings": {
             "sourceType": settings.get("source_type", "vinyl"),
@@ -169,16 +171,45 @@ async def get_tone(request):
         res = subprocess.run(["arecord", "-l"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         for line in res.stdout.splitlines():
             if line.startswith("card "):
-                devices.append(line.strip())
+                m = re.match(r"card\s+(\d+):\s+([^,]+),\s+device\s+(\d+):\s+(.*)", line)
+                if m:
+                    card_num, card_name, dev_num, dev_desc = m.groups()
+                    devices.append({
+                        "id": f"hw:{card_num},{dev_num}",
+                        "name": f"{card_name.strip()} ({dev_desc.strip()})",
+                        "cardIndex": int(card_num),
+                        "supportedRates": [44100, 48000],
+                        "isDefault": (len(devices) == 0),
+                        "channels": 2
+                    })
+                else:
+                    devices.append({
+                        "id": line.strip(),
+                        "name": line.strip(),
+                        "cardIndex": 0,
+                        "supportedRates": [44100],
+                        "isDefault": (len(devices) == 0),
+                        "channels": 2
+                    })
     except Exception:
         pass
+
+    if not devices:
+        devices = [{
+            "id": "@DEFAULT_SOURCE@",
+            "name": "PipeWire Auto-Select / Default Source",
+            "cardIndex": 0,
+            "supportedRates": [44100, 48000],
+            "isDefault": True,
+            "channels": 2
+        }]
 
     return web.json_response({
         "inputGainDb": float(settings.get("input_gain_db", 0)),
         "bassGainDb": float(settings.get("bass_gain_db", 1.5)),
         "midGainDb": float(settings.get("mid_gain_db", 0)),
         "trebleGainDb": float(settings.get("treble_gain_db", 0.5)),
-        "selectedDeviceId": "default",
+        "selectedDeviceId": settings.get("audio_device", devices[0]["id"] if devices else "default"),
         "deviceList": devices
     })
 

@@ -210,6 +210,27 @@ def check_owntone_playing():
         pass
     return False
 
+def set_owntone_player(state="play"):
+    """Starts or pauses OwnTone player."""
+    try:
+        requests.post(f"http://127.0.0.1:3689/api/player/{state}", timeout=2)
+    except Exception:
+        pass
+
+def find_usb_alsa_device():
+    """Finds USB audio capture device for ALSA fallback (e.g. plughw:1,0)."""
+    try:
+        res = subprocess.run(["arecord", "-l"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for line in res.stdout.splitlines():
+            if line.startswith("card "):
+                m = re.search(r"card\s+(\d+):.*device\s+(\d+):", line)
+                if m:
+                    card_num, dev_num = m.groups()
+                    return f"plughw:{card_num},{dev_num}"
+    except Exception:
+        pass
+    return "default"
+
 def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=6):
     """
     Captures a 6-second audio sample without interfering with the live OwnTone pipe.
@@ -227,39 +248,38 @@ def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=6):
     for tool in ["pw-record", "pw-cat"]:
         tool_path = shutil.which(tool)
         if tool_path:
-            cmd = [tool_path]
-            if tool == "pw-cat":
-                cmd.append("--record")
-            if target and target != "@DEFAULT_SOURCE@":
-                cmd.extend(["--target", target])
-            cmd.extend(["-d", f"{duration}s", "--rate=44100", "--channels=2", "--format=s16", out_wav])
             try:
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=duration + 4)
-                if os.path.exists(out_wav) and os.path.getsize(out_wav) > 4000:
-                    return out_wav
-            except Exception:
-                # Fallback if -d duration syntax is not supported in this pw-record version
+                cmd = [tool_path]
+                if tool == "pw-cat":
+                    cmd.append("--record")
+                if target and target != "@DEFAULT_SOURCE@":
+                    cmd.extend(["--target", target])
+                cmd.extend(["--rate=44100", "--channels=2", "--format=s16", out_wav])
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(duration)
+                proc.terminate()
                 try:
-                    fallback_cmd = [tool_path]
-                    if tool == "pw-cat":
-                        fallback_cmd.append("--record")
-                    if target and target != "@DEFAULT_SOURCE@":
-                        fallback_cmd.extend(["--target", target])
-                    fallback_cmd.extend(["--rate=44100", "--channels=2", "--format=s16", out_wav])
-                    proc = subprocess.Popen(fallback_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    time.sleep(duration)
-                    proc.send_signal(signal.SIGINT)
-                    try:
-                        proc.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
-                    if os.path.exists(out_wav) and os.path.getsize(out_wav) > 4000:
-                        return out_wav
-                except Exception as e:
-                    print(f"[AnalogAir] PipeWire capture via {tool} failed: {e}", flush=True)
+                if os.path.exists(out_wav) and os.path.getsize(out_wav) > 10000:
+                    return out_wav
+            except Exception as e:
+                print(f"[AnalogAir] PipeWire capture via {tool} failed: {e}", flush=True)
 
-    # 2. ffmpeg via PulseAudio/PipeWire bridge
+    # 2. arecord (Direct ALSA hardware capture)
+    if shutil.which("arecord"):
+        try:
+            alsa_dev = target if (target and (target.startswith("hw:") or target.startswith("plughw:"))) else find_usb_alsa_device()
+            cmd = ["arecord", "-q", "-D", alsa_dev, "-d", str(duration), "-f", "S16_LE", "-r", "44100", "-c", "2", out_wav]
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=duration + 3)
+            if os.path.exists(out_wav) and os.path.getsize(out_wav) > 10000:
+                return out_wav
+        except Exception as e:
+            print(f"[AnalogAir] arecord capture failed: {e}", flush=True)
+
+    # 3. ffmpeg via PulseAudio/PipeWire bridge
     if shutil.which("ffmpeg"):
         try:
             pulse_target = target if target and target != "@DEFAULT_SOURCE@" else "default"
@@ -270,21 +290,10 @@ def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=6):
                 out_wav
             ]
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=duration + 3)
-            if os.path.exists(out_wav) and os.path.getsize(out_wav) > 4000:
+            if os.path.exists(out_wav) and os.path.getsize(out_wav) > 10000:
                 return out_wav
         except Exception as e:
             print(f"[AnalogAir] ffmpeg pulse capture failed: {e}", flush=True)
-
-    # 3. arecord (ALSA)
-    if shutil.which("arecord"):
-        try:
-            alsa_dev = target if (target and (target.startswith("hw:") or target.startswith("plughw:"))) else "default"
-            cmd = ["arecord", "-q", "-D", alsa_dev, "-d", str(duration), "-f", "S16_LE", "-r", "44100", "-c", "2", out_wav]
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=duration + 3)
-            if os.path.exists(out_wav) and os.path.getsize(out_wav) > 4000:
-                return out_wav
-        except Exception as e:
-            print(f"[AnalogAir] arecord capture failed: {e}", flush=True)
 
     # 4. sounddevice fallback
     if sd:
@@ -308,7 +317,8 @@ def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=6):
                 wf.setsampwidth(2)
                 wf.setframerate(44100)
                 wf.writeframes(int_data.tobytes())
-            return out_wav
+            if os.path.exists(out_wav) and os.path.getsize(out_wav) > 10000:
+                return out_wav
         except Exception as e:
             print(f"[AnalogAir] sounddevice capture failed: {e}", flush=True)
 
@@ -373,10 +383,9 @@ async def main():
 
         sample_file = capture_sample(duration=6)
         rms = compute_wav_rms(sample_file)
-        owntone_playing = check_owntone_playing()
-        has_signal = (rms >= silence_thresh) or owntone_playing
+        has_signal = (rms >= silence_thresh)
 
-        print(f"[AnalogAir] Audio level: RMS={rms:.5f} (Threshold={silence_thresh:.5f}) | OwnTone Playing={owntone_playing} | Has Signal={has_signal} | State Playing={is_playing}", flush=True)
+        print(f"[AnalogAir] Audio level: RMS={rms:.5f} (Threshold={silence_thresh:.5f}) | Has Signal={has_signal} | State Playing={is_playing}", flush=True)
 
         if not has_signal:
             silence_counter += 1
@@ -387,6 +396,7 @@ async def main():
                 is_playing = False
                 session_locked = False
                 current_track_id = None
+                set_owntone_player("pause")
                 try:
                     with open(STATE_FILE, "w") as sf:
                         json.dump({
@@ -419,7 +429,8 @@ async def main():
             silence_counter = 0
             if not is_playing:
                 is_playing = True
-                print(f"[AnalogAir] Needle drop detected! (RMS: {rms:.5f})", flush=True)
+                print(f"[AnalogAir] Needle drop detected! (RMS: {rms:.5f} >= {silence_thresh:.5f})", flush=True)
+                set_owntone_player("play")
 
             if not continuous_mode and session_locked:
                 # Still spinning the current identified record side
@@ -456,14 +467,16 @@ async def main():
                     pass
 
             if sample_file and os.path.exists(sample_file):
+                print(f"[AnalogAir] Submitting {os.path.getsize(sample_file)} byte sample to Shazam for track identification...", flush=True)
                 try:
                     out = await shazam.recognize(sample_file)
                     track = out.get("track", {})
                     if track:
                         track_id = track.get("key")
+                        raw_title = track.get("title", idle_title)
+                        raw_artist = track.get("subtitle", idle_artist)
+                        print(f"[AnalogAir] Shazam match found: '{raw_title}' by '{raw_artist}' (ID: {track_id})", flush=True)
                         if track_id != current_track_id:
-                            raw_title = track.get("title", idle_title)
-                            raw_artist = track.get("subtitle", idle_artist)
                             sections = track.get("sections", [{}])
                             metadata = sections[0].get("metadata", [{}]) if sections else [{}]
                             base_album = metadata[0].get("text", idle_album) if metadata else idle_album
@@ -477,6 +490,7 @@ async def main():
                                 album = override[1]
                                 custom_art_url = override[2]
                                 mbid = override[3]
+                                print(f"[AnalogAir] Applying saved local override: '{artist}' - '{album}'", flush=True)
                             else:
                                 artist = raw_artist
                                 album = base_album
@@ -493,6 +507,7 @@ async def main():
                             current_track_id = track_id
                             if not continuous_mode:
                                 session_locked = True
+                                print(f"[AnalogAir] Album side locked: '{album}'. Artwork will remain active until needle lift.", flush=True)
 
                             try:
                                 with open(STATE_FILE, "w") as sf:
@@ -526,6 +541,8 @@ async def main():
                                 conn.close()
                             except Exception as le:
                                 print(f"[AnalogAir] Session logging error: {le}", flush=True)
+                    else:
+                        print(f"[AnalogAir] Shazam found no match for this sample, will retry on next check.", flush=True)
                 except Exception as e:
                     print(f"[AnalogAir] Shazam error: {e}", flush=True)
 

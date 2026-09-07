@@ -41,6 +41,7 @@ import {
   ReleaseOverride
 } from '../types';
 import { ToneVisualizer } from './ToneVisualizer';
+import { ErrorBoundary } from './ErrorBoundary';
 
 interface ControlsOverlayProps {
   isOpen: boolean;
@@ -266,6 +267,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
 
         {/* Tab Contents */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <ErrorBoundary fallbackTitle="Controls View Error">
           {/* TAB 1: QUICK ACTIONS & NOW PLAYING */}
           {activeTab === 'quick' && (
             <div className="space-y-6">
@@ -387,142 +389,155 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
 
           {/* TAB 2: TONE & GAIN CONTROLS (PIPEWIRE DSP) */}
           {activeTab === 'tone' && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-bold text-neutral-100">Audio Preamp & Tone Equalizer</h3>
-                  <p className="text-xs text-neutral-400">
-                    Processed in real-time via PipeWire filter-chain before injecting into OwnTone.
+            <ErrorBoundary fallbackTitle="Tone & Equalizer Controls Error">
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-base font-bold text-neutral-100">Audio Preamp & Tone Equalizer</h3>
+                    <p className="text-xs text-neutral-400">
+                      Processed in real-time via PipeWire filter-chain before injecting into OwnTone.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => onUpdateTone({ inputGainDb: 0, bassGainDb: 0, midGainDb: 0, trebleGainDb: 0 })}
+                    className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium rounded-lg border border-neutral-700 transition-colors"
+                  >
+                    Reset Flat (0 dB)
+                  </button>
+                </div>
+
+                {/* Real-time Visualizer */}
+                <ToneVisualizer
+                  bassDb={tone?.bassGainDb ?? 1.5}
+                  midDb={tone?.midGainDb ?? 0}
+                  trebleDb={tone?.trebleGainDb ?? 0.5}
+                  gainDb={tone?.inputGainDb ?? 0}
+                />
+
+                {/* Capture Device Selector */}
+                <div className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-2xl space-y-2">
+                  <label className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
+                    Active USB Audio Capture Interface
+                  </label>
+                  <select
+                    value={tone?.selectedDeviceId || 'default'}
+                    onChange={(e) => onUpdateTone({ selectedDeviceId: e.target.value })}
+                    className="w-full p-2.5 bg-neutral-900 border border-neutral-700 rounded-xl text-neutral-100 text-sm focus:outline-none focus:border-amber-500"
+                  >
+                    {Array.isArray(tone?.deviceList) && tone.deviceList.length > 0 ? (
+                      tone.deviceList.map((dev: any, idx: number) => {
+                        const id = typeof dev === 'string' ? dev : (dev?.id || `dev_${idx}`);
+                        const name = typeof dev === 'string' ? dev : (dev?.name || `Audio Device ${idx + 1}`);
+                        const rates = Array.isArray(dev?.supportedRates) && dev.supportedRates.length > 0
+                          ? `(${dev.supportedRates.join('/')} Hz)`
+                          : '';
+                        return (
+                          <option key={id} value={id}>
+                            {name} {rates}
+                          </option>
+                        );
+                      })
+                    ) : (
+                      <option value="default">Default System Audio (PipeWire Auto-Select)</option>
+                    )}
+                  </select>
+                  <p className="text-[11px] text-neutral-500">
+                    PipeWire automatically converts fixed 16/48000 or multi-rate 24/96000 inputs to pristine 16/44100 without clock drift.
                   </p>
                 </div>
-                <button
-                  onClick={() => onUpdateTone({ inputGainDb: 0, bassGainDb: 0, midGainDb: 0, trebleGainDb: 0 })}
-                  className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium rounded-lg border border-neutral-700 transition-colors"
-                >
-                  Reset Flat (0 dB)
-                </button>
+
+                {/* Sliders Grid: 4-Band DSP Equalizer */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {/* Input Preamp Gain */}
+                  <div className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-2xl space-y-3">
+                    <div className="flex justify-between items-center text-sm font-semibold">
+                      <span className="text-neutral-300">Input Preamp</span>
+                      <span className="font-mono text-amber-400">
+                        {(tone?.inputGainDb ?? 0) > 0 ? `+${tone?.inputGainDb}` : (tone?.inputGainDb ?? 0)} dB
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="-12"
+                      max="12"
+                      step="0.5"
+                      value={tone?.inputGainDb ?? 0}
+                      onChange={(e) => onUpdateTone({ inputGainDb: parseFloat(e.target.value) || 0 })}
+                      className="w-full accent-amber-500"
+                    />
+                    <p className="text-[11px] text-neutral-500">
+                      Capture level sensitivity to prevent analog clipping.
+                    </p>
+                  </div>
+
+                  {/* Bass Shelf (100 Hz) */}
+                  <div className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-2xl space-y-3">
+                    <div className="flex justify-between items-center text-sm font-semibold">
+                      <span className="text-neutral-300">Bass (100 Hz)</span>
+                      <span className="font-mono text-amber-400">
+                        {(tone?.bassGainDb ?? 0) > 0 ? `+${tone?.bassGainDb}` : (tone?.bassGainDb ?? 0)} dB
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="-12"
+                      max="12"
+                      step="0.5"
+                      value={tone?.bassGainDb ?? 0}
+                      onChange={(e) => onUpdateTone({ bassGainDb: parseFloat(e.target.value) || 0 })}
+                      className="w-full accent-amber-500"
+                    />
+                    <p className="text-[11px] text-neutral-500">
+                      Low-end punch and warmth for thin vinyl pressings.
+                    </p>
+                  </div>
+
+                  {/* Mid Peaking (1 kHz) */}
+                  <div className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-2xl space-y-3">
+                    <div className="flex justify-between items-center text-sm font-semibold">
+                      <span className="text-neutral-300">Mid (1 kHz)</span>
+                      <span className="font-mono text-emerald-400">
+                        {(tone?.midGainDb ?? 0) > 0 ? `+${tone?.midGainDb}` : (tone?.midGainDb ?? 0)} dB
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="-12"
+                      max="12"
+                      step="0.5"
+                      value={tone?.midGainDb ?? 0}
+                      onChange={(e) => onUpdateTone({ midGainDb: parseFloat(e.target.value) || 0 })}
+                      className="w-full accent-emerald-500"
+                    />
+                    <p className="text-[11px] text-neutral-500">
+                      Vocal presence, midrange clarity, and instrument body.
+                    </p>
+                  </div>
+
+                  {/* Treble Shelf (10 kHz) */}
+                  <div className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-2xl space-y-3">
+                    <div className="flex justify-between items-center text-sm font-semibold">
+                      <span className="text-neutral-300">Treble (10 kHz)</span>
+                      <span className="font-mono text-sky-400">
+                        {(tone?.trebleGainDb ?? 0) > 0 ? `+${tone?.trebleGainDb}` : (tone?.trebleGainDb ?? 0)} dB
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="-12"
+                      max="12"
+                      step="0.5"
+                      value={tone?.trebleGainDb ?? 0}
+                      onChange={(e) => onUpdateTone({ trebleGainDb: parseFloat(e.target.value) || 0 })}
+                      className="w-full accent-sky-500"
+                    />
+                    <p className="text-[11px] text-neutral-500">
+                      High-frequency sparkle or softening record surface hiss.
+                    </p>
+                  </div>
+                </div>
               </div>
-
-              {/* Real-time Visualizer */}
-              <ToneVisualizer
-                bassDb={tone.bassGainDb}
-                midDb={tone.midGainDb || 0}
-                trebleDb={tone.trebleGainDb}
-                gainDb={tone.inputGainDb}
-              />
-
-              {/* Capture Device Selector */}
-              <div className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-2xl space-y-2">
-                <label className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
-                  Active USB Audio Capture Interface
-                </label>
-                <select
-                  value={tone.selectedDeviceId}
-                  onChange={(e) => onUpdateTone({ selectedDeviceId: e.target.value })}
-                  className="w-full p-2.5 bg-neutral-900 border border-neutral-700 rounded-xl text-neutral-100 text-sm focus:outline-none focus:border-amber-500"
-                >
-                  {tone.deviceList.map((dev) => (
-                    <option key={dev.id} value={dev.id}>
-                      {dev.name} ({dev.supportedRates.join('/')} Hz)
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[11px] text-neutral-500">
-                  PipeWire automatically converts fixed 16/48000 or multi-rate 24/96000 inputs to pristine 16/44100 without clock drift.
-                </p>
-              </div>
-
-              {/* Sliders Grid: 4-Band DSP Equalizer */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* Input Preamp Gain */}
-                <div className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-2xl space-y-3">
-                  <div className="flex justify-between items-center text-sm font-semibold">
-                    <span className="text-neutral-300">Input Preamp</span>
-                    <span className="font-mono text-amber-400">
-                      {tone.inputGainDb > 0 ? `+${tone.inputGainDb}` : tone.inputGainDb} dB
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="-12"
-                    max="12"
-                    step="0.5"
-                    value={tone.inputGainDb}
-                    onChange={(e) => onUpdateTone({ inputGainDb: parseFloat(e.target.value) })}
-                    className="w-full accent-amber-500"
-                  />
-                  <p className="text-[11px] text-neutral-500">
-                    Capture level sensitivity to prevent analog clipping.
-                  </p>
-                </div>
-
-                {/* Bass Shelf (100 Hz) */}
-                <div className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-2xl space-y-3">
-                  <div className="flex justify-between items-center text-sm font-semibold">
-                    <span className="text-neutral-300">Bass (100 Hz)</span>
-                    <span className="font-mono text-amber-400">
-                      {tone.bassGainDb > 0 ? `+${tone.bassGainDb}` : tone.bassGainDb} dB
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="-12"
-                    max="12"
-                    step="0.5"
-                    value={tone.bassGainDb}
-                    onChange={(e) => onUpdateTone({ bassGainDb: parseFloat(e.target.value) })}
-                    className="w-full accent-amber-500"
-                  />
-                  <p className="text-[11px] text-neutral-500">
-                    Low-end punch and warmth for thin vinyl pressings.
-                  </p>
-                </div>
-
-                {/* Mid Peaking (1 kHz) */}
-                <div className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-2xl space-y-3">
-                  <div className="flex justify-between items-center text-sm font-semibold">
-                    <span className="text-neutral-300">Mid (1 kHz)</span>
-                    <span className="font-mono text-emerald-400">
-                      {(tone.midGainDb || 0) > 0 ? `+${tone.midGainDb}` : (tone.midGainDb || 0)} dB
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="-12"
-                    max="12"
-                    step="0.5"
-                    value={tone.midGainDb || 0}
-                    onChange={(e) => onUpdateTone({ midGainDb: parseFloat(e.target.value) })}
-                    className="w-full accent-emerald-500"
-                  />
-                  <p className="text-[11px] text-neutral-500">
-                    Vocal presence, midrange clarity, and instrument body.
-                  </p>
-                </div>
-
-                {/* Treble Shelf (10 kHz) */}
-                <div className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-2xl space-y-3">
-                  <div className="flex justify-between items-center text-sm font-semibold">
-                    <span className="text-neutral-300">Treble (10 kHz)</span>
-                    <span className="font-mono text-sky-400">
-                      {tone.trebleGainDb > 0 ? `+${tone.trebleGainDb}` : tone.trebleGainDb} dB
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="-12"
-                    max="12"
-                    step="0.5"
-                    value={tone.trebleGainDb}
-                    onChange={(e) => onUpdateTone({ trebleGainDb: parseFloat(e.target.value) })}
-                    className="w-full accent-sky-500"
-                  />
-                  <p className="text-[11px] text-neutral-500">
-                    High-frequency sparkle or softening record surface hiss.
-                  </p>
-                </div>
-              </div>
-            </div>
+            </ErrorBoundary>
           )}
 
           {/* TAB 3: OWNTONE SPEAKERS */}
@@ -1101,6 +1116,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
               </div>
             </div>
           )}
+          </ErrorBoundary>
         </div>
 
         {/* Footer info */}
