@@ -585,10 +585,13 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                             {out.type === 'local' && <Cpu className="w-5 h-5" />}
                           </div>
                           <div>
-                            <h4 className="text-sm font-bold text-neutral-100 flex items-center gap-1.5">
+                            <h4 className="text-sm font-bold text-neutral-100 flex items-center gap-1.5 flex-wrap">
                               <span>{out.name}</span>
                               {out.isFavorite && (
-                                <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                                  <Star className="w-2.5 h-2.5 fill-amber-400" />
+                                  Auto-Connects on Boot
+                                </span>
                               )}
                             </h4>
                             <span className="text-[11px] text-neutral-500 uppercase font-mono tracking-wider">
@@ -600,10 +603,17 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                         <div className="flex items-center gap-1.5">
                           <button
                             onClick={() => onToggleFavoriteOutput(out.id)}
-                            title="Toggle Favorite"
-                            className="p-2 text-neutral-500 hover:text-amber-400 transition-colors"
+                            title={out.isFavorite ? "Remove from startup auto-connect" : "Always connect to this speaker on boot"}
+                            className={`px-2.5 py-1.5 rounded-xl border transition-colors flex items-center gap-1.5 text-xs ${
+                              out.isFavorite 
+                                ? 'text-amber-300 bg-amber-500/15 border-amber-500/30 hover:bg-amber-500/25' 
+                                : 'text-neutral-400 bg-neutral-800/60 border-neutral-700 hover:text-neutral-200'
+                            }`}
                           >
-                            <Star className={`w-4 h-4 ${out.isFavorite ? 'text-amber-400 fill-amber-400' : ''}`} />
+                            <Star className={`w-3.5 h-3.5 ${out.isFavorite ? 'text-amber-400 fill-amber-400' : ''}`} />
+                            <span className="hidden sm:inline text-[11px] font-medium">
+                              {out.isFavorite ? 'Auto-Connect: On' : 'Auto-Connect: Off'}
+                            </span>
                           </button>
                           <button
                             onClick={() => onToggleOutput(out.id)}

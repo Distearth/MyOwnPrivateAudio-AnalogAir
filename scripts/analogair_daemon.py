@@ -12,6 +12,18 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
+
+# Python 3.13 audioop compatibility shim (PEP 594 removed audioop from stdlib)
+try:
+    import audioop
+except ModuleNotFoundError:
+    try:
+        import pyaudioop as audioop
+        sys.modules['audioop'] = audioop
+    except ImportError:
+        pass
+
 import wave
 import numpy as np
 import requests
@@ -20,7 +32,6 @@ try:
 except Exception:
     sd = None
 from shazamio import Shazam
-import sys
 import time
 import signal
 import io
@@ -244,29 +255,31 @@ def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=6):
 
     target = get_capture_target()
 
-    # 1. PipeWire pw-record / pw-cat (glitch-free native PipeWire client)
-    for tool in ["pw-record", "pw-cat"]:
-        tool_path = shutil.which(tool)
-        if tool_path:
-            try:
-                cmd = [tool_path]
-                if tool == "pw-cat":
-                    cmd.append("--record")
-                if target and target != "@DEFAULT_SOURCE@":
-                    cmd.extend(["--target", target])
-                cmd.extend(["--rate=44100", "--channels=2", "--format=s16", out_wav])
-                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                time.sleep(duration)
-                proc.terminate()
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-
-                if os.path.exists(out_wav) and os.path.getsize(out_wav) > 10000:
-                    return out_wav
-            except Exception as e:
-                print(f"[AnalogAir] PipeWire capture via {tool} failed: {e}", flush=True)
+    # 1. sounddevice (In-process PortAudio - direct and rock-solid)
+    if sd:
+        try:
+            devices = sd.query_devices()
+            input_dev = None
+            for idx, dev in enumerate(devices):
+                if dev.get("max_input_channels", 0) > 0:
+                    name = dev.get("name", "").lower()
+                    if any(k in name for k in ["cx231xx", "usb", "turntable", "codec", "audio"]):
+                        input_dev = idx
+                        break
+            
+            # Record directly from sound card
+            recording = sd.rec(int(duration * 44100), samplerate=44100, channels=2, device=input_dev)
+            sd.wait()
+            int_data = (recording * 32767).astype(np.int16)
+            with wave.open(out_wav, "wb") as wf:
+                wf.setnchannels(2)
+                wf.setsampwidth(2)
+                wf.setframerate(44100)
+                wf.writeframes(int_data.tobytes())
+            if os.path.exists(out_wav) and os.path.getsize(out_wav) > 10000:
+                return out_wav
+        except Exception as e:
+            print(f"[AnalogAir] sounddevice capture failed: {e}", flush=True)
 
     # 2. arecord (Direct ALSA hardware capture)
     if shutil.which("arecord"):
@@ -295,32 +308,29 @@ def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=6):
         except Exception as e:
             print(f"[AnalogAir] ffmpeg pulse capture failed: {e}", flush=True)
 
-    # 4. sounddevice fallback
-    if sd:
-        try:
-            devices = sd.query_devices()
-            input_dev = None
-            for idx, dev in enumerate(devices):
-                if dev.get("max_input_channels", 0) > 0:
-                    name = dev.get("name", "").lower()
-                    if "usb" in name or "audio" in name or "turntable" in name or "codec" in name:
-                        input_dev = idx
-                        break
-                    if input_dev is None:
-                        input_dev = idx
+    # 4. PipeWire pw-record / pw-cat
+    for tool in ["pw-record", "pw-cat"]:
+        tool_path = shutil.which(tool)
+        if tool_path:
+            try:
+                cmd = [tool_path]
+                if tool == "pw-cat":
+                    cmd.append("--record")
+                if target and target != "@DEFAULT_SOURCE@":
+                    cmd.extend(["--target", target])
+                cmd.extend(["--rate=44100", "--channels=2", "--format=s16", out_wav])
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(duration)
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
-            recording = sd.rec(int(duration * 44100), samplerate=44100, channels=2, device=input_dev)
-            sd.wait()
-            int_data = (recording * 32767).astype(np.int16)
-            with wave.open(out_wav, "wb") as wf:
-                wf.setnchannels(2)
-                wf.setsampwidth(2)
-                wf.setframerate(44100)
-                wf.writeframes(int_data.tobytes())
-            if os.path.exists(out_wav) and os.path.getsize(out_wav) > 10000:
-                return out_wav
-        except Exception as e:
-            print(f"[AnalogAir] sounddevice capture failed: {e}", flush=True)
+                if os.path.exists(out_wav) and os.path.getsize(out_wav) > 10000:
+                    return out_wav
+            except Exception as e:
+                print(f"[AnalogAir] PipeWire capture via {tool} failed: {e}", flush=True)
 
     return None
 

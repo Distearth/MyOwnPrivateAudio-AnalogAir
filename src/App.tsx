@@ -12,21 +12,21 @@ import {
 } from './types';
 
 const defaultState: NowPlayingState = {
-  status: 'playing',
-  artist: 'Pink Floyd',
-  album: 'The Dark Side of the Moon',
-  title: 'Speak to Me',
-  artUrl: 'https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=1000&q=80',
-  mbid: 'a30f30c6-3023-3f18-be48-6a3f1246d7e0',
+  status: 'idle',
+  artist: 'Audio-Technica',
+  album: 'Turntable Standby',
+  title: 'AnalogAir Vinyl',
+  artUrl: '',
+  mbid: '',
   sourceType: 'vinyl',
   isContinuous: false,
-  sideLocked: true,
-  playCount: 4,
-  rmsLevel: 0.18,
+  sideLocked: false,
+  playCount: 0,
+  rmsLevel: 0.0,
   sampleRate: 44100,
   bitDepth: 16,
-  inputDeviceName: 'USB Audio CODEC (Turntable Preamp USB)',
-  matchedVia: 'local_override'
+  inputDeviceName: 'USB Audio Device',
+  matchedVia: 'idle_default'
 };
 
 const defaultTone: ToneControls = {

@@ -102,21 +102,9 @@ async def get_state(request):
     rms = state.get("rms", 0.0)
     matched_via = state.get("matched_via", "idle_default" if status == "idle" else "shazam")
 
-    # Only query OwnTone if daemon state is completely absent (daemon not yet started)
+    # If daemon is not running or has not detected signal, stay strictly idle
     if not has_daemon_state:
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(f"{OWNTONE_BASE}/api/player", timeout=1) as resp:
-                    if resp.status == 200:
-                        pdata = await resp.json()
-                        if pdata.get("state") == "play":
-                            status = "playing"
-                            if title == idle_title:
-                                title = "Vinyl Playback"
-                            if matched_via == "idle_default":
-                                matched_via = "listening"
-            except Exception:
-                pass
+        status = "idle"
 
     # Determine artwork URL
     art_url = "/api/artwork/current.jpg"
@@ -226,6 +214,41 @@ async def save_tone(request):
                 }[k]
                 conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (db_key, str(data[k])))
         conn.commit()
+
+    # Apply Input Preamp Gain directly to PipeWire / PulseAudio using pactl (same backend as pavucontrol)
+    if "inputGainDb" in data:
+        try:
+            gain_db = float(data["inputGainDb"])
+            # 0 dB = 100%, +6 dB ≈ 200%, -6 dB ≈ 50%, +12 dB ≈ 400%
+            vol_pct = max(0, min(400, int(round(100.0 * (10.0 ** (gain_db / 20.0))))))
+            subprocess.run(["pactl", "set-source-volume", "@DEFAULT_SOURCE@", f"{vol_pct}%"], 
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            # Target specific Conexant / USB audio capture card in pactl
+            res = subprocess.run(["pactl", "list", "sources", "short"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            for line in res.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    src_name = parts[1]
+                    if any(k in src_name.lower() for k in ["cx231xx", "usb", "input", "analog"]):
+                        subprocess.run(["pactl", "set-source-volume", src_name, f"{vol_pct}%"], 
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            # Hardware ALSA level controls across detected capture cards
+            for card in ["0", "1", "2", "3"]:
+                for ctrl in ["Capture", "Line", "Mic"]:
+                    subprocess.run(["amixer", "-c", card, "sset", ctrl, f"{vol_pct}%"], 
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    # If tone equalizer changed, reload live capture stream to apply new DSP curve
+    if any(k in data for k in ["bassGainDb", "midGainDb", "trebleGainDb"]):
+        try:
+            subprocess.run(["systemctl", "--user", "restart", "analogair-capture.service"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
 
     # Update PipeWire filter-chain configuration if supported
     pw_conf = HOME / ".config" / "pipewire" / "filter-chain.conf.d" / "analogair-tone.conf"
@@ -422,9 +445,39 @@ async def serve_static_or_spa(request):
         return web.FileResponse(target)
     return await serve_index(request)
 
+async def auto_connect_startup_speakers(app):
+    # Wait 3 seconds after boot for OwnTone to discover local/AirPlay network devices
+    await asyncio.sleep(3)
+    fav_ids = set()
+    with get_db() as conn:
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS favorite_speakers (speaker_id TEXT PRIMARY KEY)")
+            for row in conn.execute("SELECT speaker_id FROM favorite_speakers"):
+                fav_ids.add(str(row["speaker_id"]))
+        except Exception:
+            pass
+
+    if fav_ids:
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=3) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for o in data.get("outputs", []):
+                            oid = str(o.get("id"))
+                            if oid in fav_ids and not o.get("selected", False):
+                                await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
+                                print(f"[AnalogAir Web] Auto-connected startup speaker: {o.get('name')}", flush=True)
+            except Exception as e:
+                print(f"[AnalogAir Web] Speaker auto-connect check: {e}", flush=True)
+
+async def start_background_tasks(app):
+    asyncio.create_task(auto_connect_startup_speakers(app))
+
 def main():
     init_db()
     app = web.Application()
+    app.on_startup.append(start_background_tasks)
 
     # API Routes
     app.router.add_get('/api/state', get_state)
