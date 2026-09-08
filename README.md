@@ -1,4 +1,4 @@
-# AnalogAir (My Own Private Audio) 💽 📡
+# AnalogAir (by My Own Private Audio) 💽 📡
 
 > **Turn your Raspberry Pi into an intelligent, audiophile-grade Vinyl & Analog AirPlay / Multi-Room Streaming Station with automated track recognition and real-time DSP tone controls.**
 
