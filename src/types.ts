@@ -40,11 +40,14 @@ export interface AudioLevelData {
   rawRms: number;
   dbfs: number;
   peakDbfs: number;
+  leftPeakDbfs?: number;
+  rightPeakDbfs?: number;
   gainDb: number;
   isClipping: boolean;
   isHot: boolean;
   isOptimal: boolean;
   status: 'playing' | 'idle' | 'detecting' | 'silence_grace';
+  source?: string;
   timestamp: number;
 }
 

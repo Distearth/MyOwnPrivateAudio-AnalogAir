@@ -39,7 +39,7 @@ export const LineLevelMeter: React.FC<LineLevelMeterProps> = ({
 
     const fetchLevel = async () => {
       try {
-        const res = await fetch('/api/audio-level', { signal: AbortSignal.timeout(3000) });
+        const res = await fetch('/api/audio-level', { signal: AbortSignal.timeout(2500) });
         if (!res.ok) return;
         const data: AudioLevelData = await res.json();
         if (!isMounted) return;
@@ -52,8 +52,8 @@ export const LineLevelMeter: React.FC<LineLevelMeterProps> = ({
           peakHoldDecayRef.current = currentPeak;
           setPeakHoldDbfs(currentPeak);
         } else {
-          // Slow decay (~1 dB per fetch tick)
-          peakHoldDecayRef.current = Math.max(-96, peakHoldDecayRef.current - 1.2);
+          // Smooth decay (~0.6 dB per 450ms fetch tick)
+          peakHoldDecayRef.current = Math.max(-96, peakHoldDecayRef.current - 0.6);
           setPeakHoldDbfs(peakHoldDecayRef.current);
         }
 
@@ -72,7 +72,7 @@ export const LineLevelMeter: React.FC<LineLevelMeterProps> = ({
 
     // Immediate initial fetch
     fetchLevel();
-    const pollInterval = setInterval(fetchLevel, 1200);
+    const pollInterval = setInterval(fetchLevel, 450);
 
     // Auto-off countdown timer
     const countdownInterval = setInterval(() => {
@@ -102,20 +102,20 @@ export const LineLevelMeter: React.FC<LineLevelMeterProps> = ({
 
   const currentRmsDbfs = levelData?.dbfs ?? -96;
   const currentPeakDbfs = levelData?.peakDbfs ?? -96;
-  const rmsPct = dbToPercent(currentRmsDbfs);
-  const peakPct = dbToPercent(currentPeakDbfs);
-  const peakHoldPct = dbToPercent(peakHoldDbfs);
+  const leftPeakDbfs = levelData?.leftPeakDbfs ?? currentPeakDbfs;
+  const rightPeakDbfs = levelData?.rightPeakDbfs ?? currentPeakDbfs;
 
-  // Subtle natural phase variation for stereo L/R visual realism
-  const leftPct = Math.max(0, Math.min(100, rmsPct * 0.98));
-  const rightPct = Math.max(0, Math.min(100, rmsPct * 1.02));
+  // Visual meter ladders display instantaneous peak volume for fast, responsive movement
+  const leftPct = dbToPercent(leftPeakDbfs);
+  const rightPct = dbToPercent(rightPeakDbfs);
+  const peakHoldPct = dbToPercent(peakHoldDbfs);
 
   // Headroom calculation
   const headroomDb = currentPeakDbfs > -96 ? Math.max(0, -currentPeakDbfs) : 48;
 
   // Signal Evaluation
   const getSignalEvaluation = () => {
-    if (!levelData || currentRmsDbfs <= -45) {
+    if (!levelData || (currentRmsDbfs <= -48 && currentPeakDbfs <= -44)) {
       return {
         label: 'No Signal / Needle Lifted',
         desc: 'No line-level input detected. Drop the turntable needle to start playback.',
@@ -233,7 +233,12 @@ export const LineLevelMeter: React.FC<LineLevelMeterProps> = ({
                 {isEnabled ? (
                   <>
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                    <span>MONITORING ACTIVE (BUFFERED)</span>
+                    <span>LIVE MONITOR</span>
+                    {levelData?.source && levelData.source !== 'none' && (
+                      <span className="text-emerald-400/70 font-normal border-l border-emerald-500/30 pl-1.5">
+                        {levelData.source === 'default' ? 'PulseAudio' : levelData.source.replace('alsa_input.', '').replace('.analog-stereo', '')}
+                      </span>
+                    )}
                   </>
                 ) : (
                   <span>OFF (RESOURCE SAVER)</span>
@@ -308,7 +313,7 @@ export const LineLevelMeter: React.FC<LineLevelMeterProps> = ({
               <div className="space-y-1">
                 <div className="flex justify-between items-center text-[10px] font-mono text-neutral-400">
                   <span className="font-semibold text-neutral-300">Channel L</span>
-                  <span className="text-neutral-400">{currentRmsDbfs > -90 ? `${currentRmsDbfs} dBFS` : '—'}</span>
+                  <span className="text-neutral-300">{leftPeakDbfs > -90 ? `${leftPeakDbfs.toFixed(1)} dBFS` : '—'}</span>
                 </div>
                 {renderLedSegments(leftPct, peakHoldPct)}
               </div>
@@ -317,7 +322,7 @@ export const LineLevelMeter: React.FC<LineLevelMeterProps> = ({
               <div className="space-y-1 pt-1">
                 <div className="flex justify-between items-center text-[10px] font-mono text-neutral-400">
                   <span className="font-semibold text-neutral-300">Channel R</span>
-                  <span className="text-neutral-400">{currentRmsDbfs > -90 ? `${(currentRmsDbfs * 0.99).toFixed(1)} dBFS` : '—'}</span>
+                  <span className="text-neutral-300">{rightPeakDbfs > -90 ? `${rightPeakDbfs.toFixed(1)} dBFS` : '—'}</span>
                 </div>
                 {renderLedSegments(rightPct, peakHoldPct)}
               </div>

@@ -296,7 +296,59 @@ def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=6):
 
     target = get_capture_target()
 
-    # 1. sounddevice (In-process PortAudio - direct and rock-solid)
+    # Determine PulseAudio source (safely ignoring raw ALSA hw: syntax for pulse)
+    pulse_target = "default"
+    if target and not target.startswith("hw:") and not target.startswith("plughw:") and target != "@DEFAULT_SOURCE@":
+        pulse_target = target
+    elif shutil.which("pactl"):
+        try:
+            res = subprocess.run(["pactl", "list", "sources", "short"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=1.0)
+            for line in res.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    s_name = parts[1]
+                    lower = s_name.lower()
+                    if not s_name.endswith(".monitor") and any(k in lower for k in ["usb", "codec", "audio", "turntable", "cx231xx"]):
+                        pulse_target = s_name
+                        break
+        except Exception:
+            pass
+
+    # 1. ffmpeg via PulseAudio/PipeWire bridge (Non-blocking: allows concurrent playback & metering)
+    if shutil.which("ffmpeg") and shutil.which("pactl"):
+        try:
+            cmd = [
+                "ffmpeg", "-y", "-loglevel", "quiet",
+                "-f", "pulse", "-i", pulse_target,
+                "-t", str(duration), "-ar", "44100", "-ac", "2",
+                out_wav
+            ]
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=duration + 3)
+            if os.path.exists(out_wav) and os.path.getsize(out_wav) > 10000:
+                return out_wav
+        except Exception as e:
+            print(f"[AnalogAir] ffmpeg pulse capture failed: {e}", flush=True)
+
+    # 2. parec (Native PulseAudio tool, converted to wav)
+    if shutil.which("parec") and shutil.which("ffmpeg"):
+        try:
+            p_cmd = ["parec", "--raw", "--format=s16le", "--rate=44100", "--channels=2"]
+            if pulse_target and pulse_target != "default":
+                p_cmd.extend(["-d", pulse_target])
+            p_proc = subprocess.Popen(p_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            f_cmd = ["ffmpeg", "-y", "-loglevel", "quiet", "-f", "s16le", "-ar", "44100", "-ac", "2", "-i", "-", "-t", str(duration), out_wav]
+            subprocess.run(f_cmd, stdin=p_proc.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=duration + 3)
+            try:
+                p_proc.terminate()
+                p_proc.wait(timeout=0.1)
+            except Exception:
+                p_proc.kill()
+            if os.path.exists(out_wav) and os.path.getsize(out_wav) > 10000:
+                return out_wav
+        except Exception as e:
+            print(f"[AnalogAir] parec capture failed: {e}", flush=True)
+
+    # 3. sounddevice (In-process PortAudio)
     if sd:
         try:
             devices = sd.query_devices()
@@ -322,7 +374,7 @@ def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=6):
         except Exception as e:
             print(f"[AnalogAir] sounddevice capture failed: {e}", flush=True)
 
-    # 2. arecord (Direct ALSA hardware capture)
+    # 4. arecord (Direct ALSA hardware capture)
     if shutil.which("arecord"):
         try:
             alsa_dev = target if (target and (target.startswith("hw:") or target.startswith("plughw:"))) else find_usb_alsa_device()
@@ -333,13 +385,12 @@ def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=6):
         except Exception as e:
             print(f"[AnalogAir] arecord capture failed: {e}", flush=True)
 
-    # 3. ffmpeg via PulseAudio/PipeWire bridge
-    if shutil.which("ffmpeg"):
+    # 5. ffmpeg via general bridge
+    if shutil.which("ffmpeg") and not os.path.exists(out_wav):
         try:
-            pulse_target = target if target and target != "@DEFAULT_SOURCE@" else "default"
             cmd = [
                 "ffmpeg", "-y", "-loglevel", "quiet",
-                "-f", "pulse", "-i", pulse_target,
+                "-f", "pulse", "-i", "default",
                 "-t", str(duration), "-ar", "44100", "-ac", "2",
                 out_wav
             ]
@@ -347,7 +398,7 @@ def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=6):
             if os.path.exists(out_wav) and os.path.getsize(out_wav) > 10000:
                 return out_wav
         except Exception as e:
-            print(f"[AnalogAir] ffmpeg pulse capture failed: {e}", flush=True)
+            print(f"[AnalogAir] general ffmpeg pulse capture failed: {e}", flush=True)
 
     # 4. PipeWire pw-record / pw-cat
     for tool in ["pw-record", "pw-cat"]:

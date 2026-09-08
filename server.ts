@@ -403,16 +403,22 @@ app.get('/api/audio-level', (req, res) => {
   const isHot = peakDbfs >= -3.0;
   const isOptimal = peakDbfs >= -14.0 && !isHot;
 
+  const leftPeakDbfs = peakDbfs > -90 ? Math.round((peakDbfs - 0.3) * 10) / 10 : -96.0;
+  const rightPeakDbfs = peakDbfs > -90 ? Math.round((peakDbfs + 0.2) * 10) / 10 : -96.0;
+
   res.json({
     rms: Math.round(adjustedRms * 100000) / 100000,
     rawRms: Math.round(rawRms * 100000) / 100000,
     dbfs,
     peakDbfs,
+    leftPeakDbfs,
+    rightPeakDbfs,
     gainDb,
     isClipping,
     isHot,
     isOptimal,
     status: currentState.status,
+    source: 'simulated_pulse',
     timestamp: Date.now()
   });
 });
