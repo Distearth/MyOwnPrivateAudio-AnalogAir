@@ -45,7 +45,6 @@ import {
   ReleaseOverride
 } from '../types';
 import { ToneVisualizer } from './ToneVisualizer';
-import { LineLevelMeter } from './LineLevelMeter';
 import { ErrorBoundary } from './ErrorBoundary';
 
 interface ControlsOverlayProps {
@@ -497,16 +496,23 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                     )}
                   </select>
                   <p className="text-[11px] text-neutral-500">
-                    PipeWire automatically converts fixed 16/48000 or multi-rate 24/96000 inputs to pristine 16/44100 without clock drift.
+                    PipeWire automatically converts fixed 16/48000 or multi-rate 24/96000 inputs to pristine 16/44100 without clock drift. The maximum audio resolution AirPlay supports is 16-bit / 44.1 kHz, so this sample rate conversion is required for streaming.
                   </p>
                 </div>
 
-                {/* Line-Level Signal Meter (Resource-conscious toggle) */}
-                <LineLevelMeter
-                  inputGainDb={tone?.inputGainDb ?? 0}
-                  onAdjustGain={(newGain) => onUpdateTone({ inputGainDb: newGain })}
-                  selectedDeviceId={tone?.selectedDeviceId}
-                />
+                {/* EQ Reconnect & Buffering Notice */}
+                <div className="p-4 bg-amber-950/20 border border-amber-800/40 rounded-2xl space-y-2">
+                  <div className="flex items-center gap-2 text-amber-400 text-xs font-semibold uppercase tracking-wider">
+                    <Info className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>Real-Time Tone Adjustment Notice</span>
+                  </div>
+                  <p className="text-xs text-neutral-300 leading-relaxed">
+                    When adjusting tone or preamp gain, audio drops out for ~1 second while the audio pipe connection is seamlessly re-established. Because of AirPlay network buffering (typically 2–3 seconds), it may take a few seconds for the change to be heard on your speakers.
+                  </p>
+                  <p className="text-xs text-neutral-400 leading-relaxed">
+                    <strong className="text-neutral-200">Gain Calibration Guide:</strong> Listen to your speakers during loud vinyl passages. If you hear harsh digital clipping or crackling, reduce the <strong className="text-amber-400">Input Preamp</strong>. If playback volume is noticeably quiet compared to other AirPlay sources, increase the gain.
+                  </p>
+                </div>
 
                 {/* Sliders Grid: 4-Band DSP Equalizer */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -527,8 +533,8 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                       onChange={(e) => onUpdateTone({ inputGainDb: parseFloat(e.target.value) || 0 })}
                       className="w-full accent-amber-500"
                     />
-                    <p className="text-[11px] text-neutral-500">
-                      Capture level sensitivity to prevent analog clipping.
+                    <p className="text-[11px] text-neutral-400 leading-relaxed">
+                      Listen for clipping or low volume: reduce if audio distorts on loud peaks; increase if too quiet.
                     </p>
                   </div>
 
