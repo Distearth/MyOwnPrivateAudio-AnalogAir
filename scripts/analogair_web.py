@@ -197,7 +197,11 @@ async def get_state(request):
         status = "idle"
 
     if status == "idle":
-        art_url = ""
+        custom_art = settings.get("default_art_url") or settings.get("defaultArtUrl") or ""
+        if custom_art and "custom-standby" in custom_art:
+            art_url = custom_art
+        else:
+            art_url = "/api/artwork/custom-standby.jpg"
     else:
         raw_art = state.get("art_url") or state.get("artUrl") or ""
         if raw_art.startswith("http"):
@@ -1083,14 +1087,46 @@ NO_CACHE_HEADERS = {
     "Expires": "0"
 }
 
+def ensure_default_artwork():
+    """Generates guaranteed 1000x1000 high-resolution vinyl standby artwork if missing."""
+    if DEFAULT_ART_PATH.exists() and DEFAULT_ART_PATH.stat().st_size > 500:
+        return True
+    try:
+        PIPE_DIR.mkdir(parents=True, exist_ok=True)
+        from PIL import Image, ImageDraw
+        img = Image.new('RGB', (1000, 1000), color='#121216')
+        draw = ImageDraw.Draw(img)
+        # Concentric vinyl record grooves
+        for r in range(120, 460, 18):
+            draw.ellipse([500 - r, 500 - r, 500 + r, 500 + r], outline='#1e1e26', width=2)
+        # Outer boundary ring
+        draw.ellipse([80, 80, 920, 920], outline='#2a2a34', width=8)
+        # Gold/amber record label
+        draw.ellipse([340, 340, 660, 660], fill='#d97706', outline='#b45309', width=6)
+        # Inner spindle hole
+        draw.ellipse([475, 475, 525, 525], fill='#0e0e12')
+        img.save(str(DEFAULT_ART_PATH), 'JPEG', quality=90)
+        if not LIVE_ART_PATH.exists() or LIVE_ART_PATH.stat().st_size <= 500:
+            shutil.copyfile(str(DEFAULT_ART_PATH), str(LIVE_ART_PATH))
+        return True
+    except Exception as e:
+        print(f"[AnalogAir Web] Note: Could not generate default artwork via PIL ({e})", flush=True)
+        return False
+
 async def serve_current_art(request):
+    if not LIVE_ART_PATH.exists() or LIVE_ART_PATH.stat().st_size <= 500:
+        ensure_default_artwork()
     if LIVE_ART_PATH.exists() and LIVE_ART_PATH.stat().st_size > 500:
         return web.FileResponse(LIVE_ART_PATH, headers=NO_CACHE_HEADERS)
     return await serve_standby_art(request)
 
 async def serve_standby_art(request):
+    if not DEFAULT_ART_PATH.exists() or DEFAULT_ART_PATH.stat().st_size <= 500:
+        ensure_default_artwork()
     if DEFAULT_ART_PATH.exists() and DEFAULT_ART_PATH.stat().st_size > 500:
         return web.FileResponse(DEFAULT_ART_PATH, headers=NO_CACHE_HEADERS)
+    if LIVE_ART_PATH.exists() and LIVE_ART_PATH.stat().st_size > 500:
+        return web.FileResponse(LIVE_ART_PATH, headers=NO_CACHE_HEADERS)
     for fallback in [
         UI_DIR / "assets" / "default_vinyl.jpg",
         UI_DIR / "assets" / "default_idle.jpg",
@@ -1192,6 +1228,16 @@ async def download_web_script(request):
     return web.Response(status=404)
 
 # --- 11. Static & SPA Serving ---
+async def serve_asset(request):
+    filename = request.match_info.get("filename", "")
+    target = UI_DIR / "assets" / filename
+    if target.is_file():
+        return web.FileResponse(target)
+    # If the requested asset is an image (e.g. Vite-hashed image or default art), return standby artwork instead of 404
+    if any(filename.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".svg"]):
+        return await serve_standby_art(request)
+    return web.Response(status=404)
+
 async def serve_index(request):
     index_file = UI_DIR / "index.html"
     if index_file.exists():
@@ -1294,7 +1340,8 @@ def main():
     app.router.add_get('/api/installer/daemon', download_daemon_script)
     app.router.add_get('/api/installer/web', download_web_script)
 
-    # 10. Static assets
+    # 10. Static assets with intelligent image failover
+    app.router.add_get('/assets/{filename:.*}', serve_asset)
     assets_dir = UI_DIR / "assets"
     if assets_dir.exists():
         app.router.add_static('/assets', str(assets_dir))

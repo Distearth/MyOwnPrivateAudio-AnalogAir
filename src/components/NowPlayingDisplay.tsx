@@ -21,6 +21,7 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
 }) => {
   const [imageError, setImageError] = useState(false);
   const [useLocalFallback, setUseLocalFallback] = useState(false);
+  const [fallbackLevel, setFallbackLevel] = useState<number>(0);
   const [isFaded, setIsFaded] = useState(false);
   const isIdle = state.status === 'idle';
 
@@ -33,7 +34,8 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
   useEffect(() => {
     setImageError(false);
     setUseLocalFallback(false);
-  }, [state.artUrl, state.album, state.artist, state.status]);
+    setFallbackLevel(0);
+  }, [state.artUrl, state.album, state.artist, state.status, sourceType]);
 
   // 10-Second Idle Auto-Fade Timer
   // Fades out header, footer, and edit buttons, leaving purely the artwork, artist, and title.
@@ -67,22 +69,40 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
     };
   }, [settings?.idleFadeSeconds]);
 
-  // Determine fallback artwork based on selected source type
-  const defaultArtwork = useMemo(() => {
-    if (settings?.defaultArtUrl && !settings.defaultArtUrl.includes('custom-standby.jpg')) {
-      return settings.defaultArtUrl;
-    }
+  // Static bundled artwork by source type
+  const bundledSourceArt = useMemo(() => {
     if (sourceType === 'tape') return tapeDefaultArt;
     if (sourceType === 'cd') return cdDefaultArt;
     return vinylDefaultArt;
-  }, [settings?.defaultArtUrl, sourceType]);
+  }, [sourceType]);
 
+  // Multi-tier artwork resolution with seamless failover
+  // Level 0: Primary source (state.artUrl when playing, or configured default / custom-standby)
+  // Level 1: Standby local Pi image (/api/artwork/custom-standby.jpg)
+  // Level 2: Live audio pipe mirror (/api/artwork/current.jpg)
+  // Level 3: Static bundled image asset (vinylDefaultArt, tapeDefaultArt, cdDefaultArt)
+  // Level 4: Pure CSS/SVG vector sleeve (never breaks, zero network dependency)
   const displayArt = useMemo(() => {
-    if (isIdle) return defaultArtwork;
-    if (imageError) return defaultArtwork;
+    if (fallbackLevel >= 4) return '';
+    if (fallbackLevel === 3) return bundledSourceArt;
+    if (fallbackLevel === 2) return `/api/artwork/current.jpg?v=${Date.now()}`;
+    if (fallbackLevel === 1) return `/api/artwork/custom-standby.jpg?v=${Date.now()}`;
+
+    if (isIdle) {
+      if (settings?.defaultArtUrl && settings.defaultArtUrl.trim() && !settings.defaultArtUrl.includes('default_vinyl.jpg')) {
+        return settings.defaultArtUrl;
+      }
+      return '/api/artwork/custom-standby.jpg';
+    }
+
     if (useLocalFallback) return `/api/artwork/current.jpg?v=${Date.now()}`;
-    return state.artUrl || defaultArtwork;
-  }, [isIdle, imageError, useLocalFallback, state.artUrl, defaultArtwork]);
+    if (state.artUrl && state.artUrl.trim()) return state.artUrl;
+    return '/api/artwork/custom-standby.jpg';
+  }, [fallbackLevel, bundledSourceArt, isIdle, settings?.defaultArtUrl, useLocalFallback, state.artUrl]);
+
+  const handleImageError = () => {
+    setFallbackLevel(prev => prev + 1);
+  };
 
   // Stream label text based on source preference
   const streamLabel = useMemo(() => {
@@ -267,20 +287,42 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
 
           {/* Sleeve & Front Artwork */}
           <div className="relative w-64 h-64 sm:w-80 sm:h-80 md:w-96 md:h-96 rounded-2xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.85)] border border-neutral-800/90 bg-neutral-900 transition-transform duration-500">
-            <img
-              src={displayArt}
-              alt={displayAlbum}
-              referrerPolicy="no-referrer"
-              onError={() => {
-                if (!useLocalFallback && state.artUrl && state.artUrl.startsWith('http')) {
-                  // External CDN image failed, fallback to local Pi-cached art
-                  setUseLocalFallback(true);
-                } else {
-                  setImageError(true);
-                }
-              }}
-              className="w-full h-full object-cover select-none pointer-events-none transition-transform duration-700 group-hover:scale-105"
-            />
+            {fallbackLevel < 4 && displayArt ? (
+              <img
+                key={displayArt}
+                src={displayArt}
+                alt={displayAlbum}
+                referrerPolicy="no-referrer"
+                onError={handleImageError}
+                className="w-full h-full object-cover select-none pointer-events-none transition-transform duration-700 group-hover:scale-105"
+              />
+            ) : (
+              /* Built-in Standby Sleeve SVG/CSS Canvas (Immune to network/file errors) */
+              <div className="w-full h-full flex flex-col items-center justify-center p-6 bg-gradient-to-br from-neutral-900 via-neutral-950 to-neutral-900 select-none relative overflow-hidden">
+                {/* Grooved concentric circles */}
+                <div className="absolute inset-4 rounded-full border border-neutral-800/80 pointer-events-none" />
+                <div className="absolute inset-10 rounded-full border border-neutral-800/60 pointer-events-none" />
+                <div className="absolute inset-16 rounded-full border border-neutral-800/40 pointer-events-none" />
+                <div className="absolute inset-24 rounded-full border border-neutral-800/30 pointer-events-none" />
+                
+                {/* Center Label */}
+                <div className="relative z-10 w-28 h-28 sm:w-36 sm:h-36 rounded-full bg-gradient-to-tr from-amber-600 via-amber-500 to-amber-600 border-4 border-amber-400/40 shadow-2xl flex flex-col items-center justify-center text-center p-2">
+                  <Disc3 className="w-8 h-8 sm:w-10 sm:h-10 text-neutral-950 mb-1" />
+                  <span className="text-[10px] sm:text-xs font-black tracking-wider uppercase text-neutral-950 leading-tight">
+                    {sourceType === 'tape' ? 'CASSETTE' : sourceType === 'cd' ? 'COMPACT DISC' : 'ANALOGAIR'}
+                  </span>
+                  <span className="text-[8px] sm:text-[9px] font-mono tracking-widest text-neutral-900/80 font-bold">
+                    HIGH FIDELITY
+                  </span>
+                  {/* Center spindle hole */}
+                  <div className="absolute w-3.5 h-3.5 rounded-full bg-neutral-950 border border-amber-300/40" />
+                </div>
+
+                <div className="absolute bottom-3 text-[10px] font-mono tracking-widest text-neutral-500 uppercase">
+                  {displayAlbum}
+                </div>
+              </div>
+            )}
 
             {/* Subtle high-fidelity gloss overlay */}
             <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/5 to-white/10 pointer-events-none" />

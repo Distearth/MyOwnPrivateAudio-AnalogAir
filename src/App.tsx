@@ -41,7 +41,7 @@ const defaultTone: ToneControls = {
 const defaultSettings: SystemPreferences = {
   sourceType: 'vinyl',
   customStreamLabel: 'Vinyl Audio Streaming',
-  defaultArtUrl: '/assets/default_vinyl.jpg',
+  defaultArtUrl: '/api/artwork/custom-standby.jpg',
   idleArtist: 'Audio-Technica',
   idleAlbum: 'AT-LP60X Turntable',
   idleTitle: 'AnalogAir Vinyl Stream',
