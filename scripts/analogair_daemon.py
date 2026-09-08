@@ -427,6 +427,7 @@ async def main():
     last_title = idle_title
 
     while True:
+        enable_recognition = get_setting("enable_recognition", "false").lower() == "true"
         continuous_mode = get_setting("continuous_id", "false").lower() == "true"
         silence_timeout_sec = int(get_setting("silence_gap", "15"))
         silence_thresh = float(get_setting("silence_threshold", str(DEFAULT_SILENCE_THRESHOLD)))
@@ -436,7 +437,7 @@ async def main():
         rms = compute_wav_rms(sample_file)
         has_signal = (rms >= silence_thresh)
 
-        print(f"[AnalogAir] Audio level: RMS={rms:.5f} (Threshold={silence_thresh:.5f}) | Has Signal={has_signal} | State Playing={is_playing}", flush=True)
+        print(f"[AnalogAir] Audio level: RMS={rms:.5f} (Threshold={silence_thresh:.5f}) | Has Signal={has_signal} | State Playing={is_playing} | Recognition={enable_recognition}", flush=True)
 
         if not has_signal:
             silence_counter += 1
@@ -484,6 +485,25 @@ async def main():
                 is_playing = True
                 print(f"[AnalogAir] Needle drop detected! (RMS: {rms:.5f} >= {silence_thresh:.5f})", flush=True)
                 set_owntone_player("play")
+
+            # Check if Recognition is Disabled (No Recognition / Resource Saver Mode)
+            if not enable_recognition:
+                # Music streams with default art & labels; no Shazam lookup and no session recording
+                try:
+                    with open(STATE_FILE, "w") as sf:
+                        json.dump({
+                            "status": "playing",
+                            "artist": idle_artist,
+                            "album": idle_album,
+                            "title": idle_title,
+                            "art_url": "",
+                            "rms": float(rms),
+                            "matched_via": "idle_default"
+                        }, sf)
+                except Exception:
+                    pass
+                await asyncio.sleep(CHECK_INTERVAL)
+                continue
 
             if not continuous_mode and session_locked:
                 # Still spinning the current identified record side

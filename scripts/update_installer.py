@@ -246,6 +246,7 @@ settings = {{
     'silence_gap': '15',
     'silence_threshold': '0.0035',
     'source_type': 'vinyl',
+    'enable_recognition': 'false',
     'continuous_id': 'false',
     'input_gain_db': '0.0',
     'bass_gain_db': '1.5',

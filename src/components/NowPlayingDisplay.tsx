@@ -178,7 +178,12 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
           )}
 
           {/* Badge 2: Identification Mode */}
-          {state.isContinuous ? (
+          {!settings?.enableRecognition ? (
+            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-800/90 text-neutral-300 border border-neutral-700/80 text-[11px] font-semibold">
+              <Radio className="w-3.5 h-3.5 text-neutral-400" />
+              <span>Direct Stream (No ID)</span>
+            </span>
+          ) : state.isContinuous ? (
             <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-500/15 text-sky-300 border border-sky-500/30 text-[11px] font-semibold">
               <Music className="w-3.5 h-3.5 text-sky-400" />
               <span>Song ID Mode</span>

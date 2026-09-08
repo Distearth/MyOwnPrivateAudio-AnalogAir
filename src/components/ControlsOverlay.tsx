@@ -45,6 +45,7 @@ import {
   ReleaseOverride
 } from '../types';
 import { ToneVisualizer } from './ToneVisualizer';
+import { LineLevelMeter } from './LineLevelMeter';
 import { ErrorBoundary } from './ErrorBoundary';
 
 interface ControlsOverlayProps {
@@ -270,6 +271,70 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
           {/* TAB 1: QUICK ACTIONS & NOW PLAYING */}
           {activeTab === 'quick' && (
             <div className="space-y-6">
+              {/* No Recognition / Album Identification Mode Control (Above Now Playing Box) */}
+              <div className={`p-4 sm:p-5 rounded-2xl border transition-all ${
+                !settings.enableRecognition
+                  ? 'bg-neutral-950/90 border-amber-500/40 ring-1 ring-amber-500/20 shadow-lg'
+                  : 'bg-emerald-950/20 border-emerald-500/30 ring-1 ring-emerald-500/10 shadow-sm'
+              }`}>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-start gap-3.5">
+                    <div className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${
+                      !settings.enableRecognition
+                        ? 'bg-neutral-900 border border-neutral-800 text-amber-400'
+                        : 'bg-emerald-900/40 border border-emerald-700/50 text-emerald-400'
+                    }`}>
+                      {!settings.enableRecognition ? (
+                        <Radio className="w-5 h-5" />
+                      ) : (
+                        <Sparkles className="w-5 h-5" />
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="text-sm font-bold text-white">
+                          {!settings.enableRecognition
+                            ? 'Album Identification: Off (Resource Saver Mode)'
+                            : 'Album Identification: Active (Shazam & MusicBrainz)'}
+                        </h4>
+                        <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border ${
+                          !settings.enableRecognition
+                            ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                            : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                        }`}>
+                          {!settings.enableRecognition ? 'DEFAULT • ZERO CPU OVERHEAD' : 'LIVE FINGERPRINTING'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-neutral-400 leading-relaxed">
+                        {!settings.enableRecognition
+                          ? 'Music streams with default art and info. Acoustic Shazam lookups are bypassed to conserve CPU and RAM on low-power Raspberry Pis. No history is logged to Played Albums.'
+                          : 'Acoustic fingerprinting is active. Needle drops are submitted to Shazam & MusicBrainz to identify titles, fetch album art, and record spins to Played Albums.'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
+                    {!settings.enableRecognition ? (
+                      <button
+                        onClick={() => onUpdateSettings({ enableRecognition: true })}
+                        className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs rounded-xl flex items-center gap-2 transition-all shadow-md active:scale-95 whitespace-nowrap"
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        <span>Enable Album Identification</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => onUpdateSettings({ enableRecognition: false })}
+                        className="px-3.5 py-2 bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white font-medium text-xs rounded-xl border border-neutral-700 flex items-center gap-2 transition-all active:scale-95 whitespace-nowrap"
+                      >
+                        <Radio className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Switch to Resource Saver</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               {/* Metadata Quick Overview Card */}
               <div className="p-5 bg-neutral-950/70 border border-neutral-800 rounded-2xl flex flex-col sm:flex-row gap-5 items-center justify-between">
                 <div className="flex items-center gap-4 w-full sm:w-auto">
@@ -286,11 +351,15 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                       <span className="text-xs px-2 py-0.5 rounded font-mono bg-neutral-800 text-amber-400 border border-neutral-700">
                         {state.status === 'idle' ? 'STANDBY' : 'STREAMING'}
                       </span>
-                      {state.matchedVia === 'local_override' && (
+                      {!settings.enableRecognition ? (
+                        <span className="text-xs px-2 py-0.5 rounded font-mono bg-neutral-800 text-neutral-400 border border-neutral-700">
+                          No Recognition
+                        </span>
+                      ) : state.matchedVia === 'local_override' ? (
                         <span className="text-xs px-2 py-0.5 rounded font-mono bg-emerald-950 text-emerald-300 border border-emerald-800">
                           Custom Saved
                         </span>
-                      )}
+                      ) : null}
                     </div>
                     <h3 className="text-lg font-bold text-white leading-snug">{sanitizeAlbumTitle(state.album)}</h3>
                     <p className="text-sm text-neutral-400">{state.artist}</p>
@@ -312,49 +381,62 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
               </div>
 
               {/* Recognition Mode Selector */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div
-                  onClick={() => onToggleMode(false)}
-                  className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
-                    !state.isContinuous
-                      ? 'bg-amber-500/10 border-amber-500/40 shadow-inner'
-                      : 'bg-neutral-950/60 border-neutral-800/80 hover:border-neutral-700'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2 text-neutral-200 font-bold text-sm">
-                      <Lock className="w-4 h-4 text-amber-400" />
-                      <span>Vinyl Side Lock (Recommended)</span>
-                    </div>
-                    {!state.isContinuous && (
-                      <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-                    )}
-                  </div>
-                  <p className="text-xs text-neutral-400 leading-relaxed">
-                    Locks the detected Album Title and Artwork for the entire ~20 minute LP side. Eliminates flickering or misrecognitions between tracks.
-                  </p>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs text-neutral-400 px-1">
+                  <span className="font-semibold uppercase tracking-wider text-[11px] text-neutral-400">
+                    Identification Strategy
+                  </span>
+                  {!settings.enableRecognition && (
+                    <span className="text-[11px] text-amber-400 font-mono">
+                      (Applies when Album Identification is enabled)
+                    </span>
+                  )}
                 </div>
 
-                <div
-                  onClick={() => onToggleMode(true)}
-                  className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
-                    state.isContinuous
-                      ? 'bg-sky-500/10 border-sky-500/40 shadow-inner'
-                      : 'bg-neutral-950/60 border-neutral-800/80 hover:border-neutral-700'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2 text-neutral-200 font-bold text-sm">
-                      <Music className="w-4 h-4 text-sky-400" />
-                      <span>Continuous Song-by-Song ID</span>
+                <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${!settings.enableRecognition ? 'opacity-60' : ''}`}>
+                  <div
+                    onClick={() => onToggleMode(false)}
+                    className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
+                      !state.isContinuous
+                        ? 'bg-amber-500/10 border-amber-500/40 shadow-inner'
+                        : 'bg-neutral-950/60 border-neutral-800/80 hover:border-neutral-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-neutral-200 font-bold text-sm">
+                        <Lock className="w-4 h-4 text-amber-400" />
+                        <span>Vinyl Side Lock (Recommended)</span>
+                      </div>
+                      {!state.isContinuous && (
+                        <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                      )}
                     </div>
-                    {state.isContinuous && (
-                      <span className="w-2.5 h-2.5 rounded-full bg-sky-400" />
-                    )}
+                    <p className="text-xs text-neutral-400 leading-relaxed">
+                      Locks the detected Album Title and Artwork for the entire ~20 minute LP side. Eliminates flickering or misrecognitions between tracks.
+                    </p>
                   </div>
-                  <p className="text-xs text-neutral-400 leading-relaxed">
-                    Continuously listens and identifies individual song titles as the needle advances across track boundaries. Displays real-time song title on screen.
-                  </p>
+
+                  <div
+                    onClick={() => onToggleMode(true)}
+                    className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
+                      state.isContinuous
+                        ? 'bg-sky-500/10 border-sky-500/40 shadow-inner'
+                        : 'bg-neutral-950/60 border-neutral-800/80 hover:border-neutral-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-neutral-200 font-bold text-sm">
+                        <Music className="w-4 h-4 text-sky-400" />
+                        <span>Continuous Song-by-Song ID</span>
+                      </div>
+                      {state.isContinuous && (
+                        <span className="w-2.5 h-2.5 rounded-full bg-sky-400" />
+                      )}
+                    </div>
+                    <p className="text-xs text-neutral-400 leading-relaxed">
+                      Continuously listens and identifies individual song titles as the needle advances across track boundaries. Displays real-time song title on screen.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -418,6 +500,13 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                     PipeWire automatically converts fixed 16/48000 or multi-rate 24/96000 inputs to pristine 16/44100 without clock drift.
                   </p>
                 </div>
+
+                {/* Line-Level Signal Meter (Resource-conscious toggle) */}
+                <LineLevelMeter
+                  inputGainDb={tone?.inputGainDb ?? 0}
+                  onAdjustGain={(newGain) => onUpdateTone({ inputGainDb: newGain })}
+                  selectedDeviceId={tone?.selectedDeviceId}
+                />
 
                 {/* Sliders Grid: 4-Band DSP Equalizer */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1030,8 +1119,75 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
               <div>
                 <h3 className="text-base font-bold text-neutral-100">System Preferences</h3>
                 <p className="text-xs text-neutral-400 mt-0.5">
-                  Configure audio source branding, standby artwork, and display behavior.
+                  Configure album identification, audio source branding, standby artwork, and display behavior.
                 </p>
+              </div>
+
+              {/* Album Recognition Mode (Default: No Recognition / Resource Saver) */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-amber-400" />
+                    <span>Album Identification Engine</span>
+                  </label>
+                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
+                    !settings.enableRecognition
+                      ? 'bg-neutral-800 text-neutral-300 border border-neutral-700'
+                      : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                  }`}>
+                    {!settings.enableRecognition ? 'OFF (RESOURCE SAVER)' : 'LIVE IDENTIFICATION ON'}
+                  </span>
+                </div>
+
+                <p className="text-xs text-neutral-400 leading-relaxed">
+                  By default, AnalogAir runs in <strong className="text-neutral-200">No Recognition (Resource Saver)</strong> mode: music plays continuously through OwnTone with zero acoustic CPU/RAM overhead, keeping default art and info displayed without recording to Played Albums. Turn on Album Identification below to enable live Shazam & MusicBrainz lookups.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  {/* Option 1: No Recognition (Default) */}
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ enableRecognition: false })}
+                    className={`p-4 rounded-xl border text-left flex flex-col justify-between transition-all ${
+                      !settings.enableRecognition
+                        ? 'bg-amber-500/15 border-amber-500/50 text-white shadow-md ring-1 ring-amber-500/30'
+                        : 'bg-neutral-900/60 border-neutral-800 text-neutral-400 hover:border-neutral-700 hover:text-neutral-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 font-bold text-sm text-neutral-200">
+                        <Radio className={`w-4 h-4 ${!settings.enableRecognition ? 'text-amber-400' : 'text-neutral-500'}`} />
+                        <span>No Recognition (Default)</span>
+                      </div>
+                      {!settings.enableRecognition && <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />}
+                    </div>
+                    <p className="text-[11px] text-neutral-400 leading-relaxed">
+                      <strong>Zero CPU/RAM overhead.</strong> Music plays and streams directly to AirPlay. Retains default artwork & labels. No Shazam queries or session logs. Best for Raspberry Pi Zero, 1, 2, 3, or low memory.
+                    </p>
+                  </button>
+
+                  {/* Option 2: Live Album Identification */}
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ enableRecognition: true })}
+                    className={`p-4 rounded-xl border text-left flex flex-col justify-between transition-all ${
+                      settings.enableRecognition
+                        ? 'bg-emerald-500/15 border-emerald-500/50 text-white shadow-md ring-1 ring-emerald-500/30'
+                        : 'bg-neutral-900/60 border-neutral-800 text-neutral-400 hover:border-neutral-700 hover:text-neutral-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 font-bold text-sm text-neutral-200">
+                        <Sparkles className={`w-4 h-4 ${settings.enableRecognition ? 'text-emerald-400' : 'text-neutral-500'}`} />
+                        <span>Album Identification Active</span>
+                      </div>
+                      {settings.enableRecognition && <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />}
+                    </div>
+                    <p className="text-[11px] text-neutral-400 leading-relaxed">
+                      <strong>Acoustic Fingerprinting.</strong> Uses Shazam and MusicBrainz to identify vinyl records, auto-fetch high-res cover art, and record spins to the Played Albums tab.
+                    </p>
+                  </button>
+                </div>
               </div>
 
               {/* Source Type Selector */}

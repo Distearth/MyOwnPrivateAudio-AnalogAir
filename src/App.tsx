@@ -45,6 +45,7 @@ const defaultSettings: SystemPreferences = {
   idleArtist: 'Audio-Technica',
   idleAlbum: 'AT-LP60X Turntable',
   idleTitle: 'AnalogAir Vinyl Stream',
+  enableRecognition: false,
   continuousId: false,
   silenceGapSeconds: 20,
   dimMinutes: 25,

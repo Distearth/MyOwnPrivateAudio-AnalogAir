@@ -27,6 +27,7 @@ interface StoredData {
     idleArtist: string;
     idleAlbum: string;
     idleTitle: string;
+    enableRecognition: boolean;
     continuousId: boolean;
     silenceGapSeconds: number;
     dimMinutes: number;
@@ -74,6 +75,7 @@ const defaultData: StoredData = {
     idleArtist: 'Audio-Technica',
     idleAlbum: 'AT-LP60X Turntable',
     idleTitle: 'AnalogAir Vinyl Stream',
+    enableRecognition: false,
     continuousId: false,
     silenceGapSeconds: 20,
     dimMinutes: 25,
@@ -260,23 +262,22 @@ interface ServerState {
   startedAt: string;
 }
 
-// Current Now Playing State
+// Current Now Playing State (Default No Recognition / Resource Saver Mode)
 let currentState: ServerState = {
   status: 'playing',
-  artist: 'Pink Floyd',
-  album: 'The Dark Side of the Moon',
-  title: 'Speak to Me',
-  artUrl: 'https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=1000&q=80',
-  mbid: 'a30f30c6-3023-3f18-be48-6a3f1246d7e0',
-  sourceType: 'vinyl',
-  isContinuous: db.settings.continuousId,
+  artist: db.settings.idleArtist || 'Audio-Technica',
+  album: db.settings.idleAlbum || 'AT-LP60X Turntable',
+  title: db.settings.idleTitle || 'AnalogAir Vinyl Stream',
+  artUrl: db.settings.defaultArtUrl || '/src/assets/images/analogair_idle_art_1788723997443.jpg',
+  sourceType: db.settings.sourceType || 'vinyl',
+  isContinuous: false,
   sideLocked: true,
-  playCount: 4,
+  playCount: 1,
   rmsLevel: 0.18,
   sampleRate: 44100,
   bitDepth: 16,
   inputDeviceName: 'USB Audio CODEC (Turntable Preamp USB)',
-  matchedVia: 'local_override',
+  matchedVia: 'idle_default',
   startedAt: new Date(Date.now() - 145000).toISOString()
 };
 
@@ -378,6 +379,42 @@ app.post('/api/tone', (req, res) => {
   
   saveData(db);
   res.json({ success: true, tone: db.tone });
+});
+
+// Line Level Input Monitor Endpoint (Buffered)
+app.get('/api/audio-level', (req, res) => {
+  const gainDb = db.tone.inputGainDb || 0;
+  const isPlaying = currentState.status === 'playing';
+
+  // Natural vinyl audio signal simulation:
+  // Base RMS ~ 0.16 with subtle realistic groove dynamics
+  const time = Date.now() / 1000;
+  const osc = Math.sin(time * 2.1) * 0.025 + Math.cos(time * 0.9) * 0.02;
+  const rawRms = isPlaying ? Math.max(0.04, 0.16 + osc) : 0.001;
+  const gainFactor = Math.pow(10, gainDb / 20);
+  const adjustedRms = Math.min(1.0, rawRms * gainFactor);
+
+  const dbfs = adjustedRms > 0.0001 ? Math.round(20 * Math.log10(adjustedRms) * 10) / 10 : -96.0;
+  // Peak for vinyl dynamic range is ~3-5 dB above average RMS
+  const peakRms = Math.min(1.0, adjustedRms * 1.48);
+  const peakDbfs = peakRms > 0.0001 ? Math.round(20 * Math.log10(peakRms) * 10) / 10 : -96.0;
+
+  const isClipping = peakDbfs >= -0.5;
+  const isHot = peakDbfs >= -3.0;
+  const isOptimal = peakDbfs >= -14.0 && !isHot;
+
+  res.json({
+    rms: Math.round(adjustedRms * 100000) / 100000,
+    rawRms: Math.round(rawRms * 100000) / 100000,
+    dbfs,
+    peakDbfs,
+    gainDb,
+    isClipping,
+    isHot,
+    isOptimal,
+    status: currentState.status,
+    timestamp: Date.now()
+  });
 });
 
 // 4. MusicBrainz release search proxy with robust iTunes fallback
@@ -659,6 +696,7 @@ app.post('/api/settings', (req, res) => {
     idleArtist,
     idleAlbum,
     idleTitle,
+    enableRecognition,
     continuousId,
     silenceGapSeconds,
     dimMinutes,
@@ -674,6 +712,25 @@ app.post('/api/settings', (req, res) => {
   if (idleArtist !== undefined) db.settings.idleArtist = idleArtist;
   if (idleAlbum !== undefined) db.settings.idleAlbum = idleAlbum;
   if (idleTitle !== undefined) db.settings.idleTitle = idleTitle;
+  if (enableRecognition !== undefined) {
+    db.settings.enableRecognition = !!enableRecognition;
+    if (!db.settings.enableRecognition) {
+      // Revert to default art and labels immediately
+      currentState.artist = db.settings.idleArtist || 'Audio-Technica';
+      currentState.album = db.settings.idleAlbum || 'AT-LP60X Turntable';
+      currentState.title = db.settings.idleTitle || 'AnalogAir Vinyl Stream';
+      currentState.artUrl = db.settings.defaultArtUrl || '/src/assets/images/analogair_idle_art_1788723997443.jpg';
+      currentState.matchedVia = 'idle_default';
+    } else {
+      // Album recognition active: populate identified record
+      currentState.artist = 'Pink Floyd';
+      currentState.album = 'The Dark Side of the Moon';
+      currentState.title = db.settings.continuousId ? 'Speak to Me' : 'AnalogAir';
+      currentState.artUrl = 'https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=1000&q=80';
+      currentState.mbid = 'a30f30c6-3023-3f18-be48-6a3f1246d7e0';
+      currentState.matchedVia = 'local_override';
+    }
+  }
   if (continuousId !== undefined) db.settings.continuousId = !!continuousId;
   if (silenceGapSeconds !== undefined) db.settings.silenceGapSeconds = Number(silenceGapSeconds);
   if (dimMinutes !== undefined) db.settings.dimMinutes = Number(dimMinutes);

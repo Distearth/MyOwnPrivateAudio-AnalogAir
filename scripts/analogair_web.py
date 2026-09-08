@@ -12,6 +12,7 @@ import subprocess
 import shutil
 import re
 import time
+import math
 import base64
 import urllib.parse
 from datetime import datetime
@@ -122,6 +123,7 @@ def init_db():
         # Seed default settings if empty
         defaults = {
             "source_type": "vinyl",
+            "enable_recognition": "false",
             "idle_artist": "Audio-Technica",
             "idle_album": "AT-LP60X Turntable",
             "idle_title": "AnalogAir Vinyl",
@@ -232,6 +234,7 @@ async def get_state(request):
             "idleArtist": idle_artist,
             "idleAlbum": idle_album,
             "idleTitle": idle_title,
+            "enableRecognition": settings.get("enable_recognition", "false").lower() == "true",
             "continuousId": settings.get("continuous_id", "false").lower() == "true",
             "silenceGapSeconds": int(settings.get("silence_gap", 15)),
             "dimMinutes": int(settings.get("dim_minutes", 25)),
@@ -420,6 +423,50 @@ async def save_tone(request):
             pass
 
     return web.json_response({"success": True, "tone": data})
+
+async def get_audio_level(request):
+    """Returns buffered input line-level RMS and peak dBFS from latest audio capture."""
+    rms = 0.0
+    status = "idle"
+    if STATE_FILE.exists():
+        try:
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+                rms = float(data.get("rms", 0.0))
+                status = data.get("status", "idle")
+        except Exception:
+            pass
+
+    settings = get_settings_dict()
+    gain_db = float(settings.get("input_gain_db", 0.0))
+    gain_linear = 10.0 ** (gain_db / 20.0)
+    adjusted_rms = min(1.0, rms * gain_linear)
+
+    if adjusted_rms <= 0.00001:
+        dbfs = -96.0
+        peak_dbfs = -96.0
+    else:
+        dbfs = round(20.0 * math.log10(adjusted_rms), 1)
+        # Peak estimate for musical vinyl dynamics (~3-4.5 dB above average RMS)
+        peak_rms = min(1.0, adjusted_rms * 1.48)
+        peak_dbfs = round(20.0 * math.log10(peak_rms), 1)
+
+    is_clipping = peak_dbfs >= -0.5
+    is_hot = peak_dbfs >= -3.0
+    is_optimal = peak_dbfs >= -14.0 and not is_hot
+
+    return web.json_response({
+        "rms": round(adjusted_rms, 5),
+        "rawRms": round(rms, 5),
+        "dbfs": dbfs,
+        "peakDbfs": peak_dbfs,
+        "gainDb": gain_db,
+        "isClipping": is_clipping,
+        "isHot": is_hot,
+        "isOptimal": is_optimal,
+        "status": status,
+        "timestamp": time.time()
+    })
 
 # --- 3. OwnTone Multi-Room Speaker Outputs ---
 async def get_owntone_outputs(request):
@@ -772,6 +819,7 @@ async def get_settings(request):
             "idleArtist": settings.get("idle_artist", "Audio-Technica"),
             "idleAlbum": settings.get("idle_album", "AT-LP60X Turntable"),
             "idleTitle": settings.get("idle_title", "AnalogAir Vinyl"),
+            "enableRecognition": settings.get("enable_recognition", "false").lower() == "true",
             "continuousId": settings.get("continuous_id", "false").lower() == "true",
             "silenceGapSeconds": int(settings.get("silence_gap", 15)),
             "dimMinutes": int(settings.get("dim_minutes", 25)),
@@ -790,6 +838,7 @@ async def save_settings(request):
             "idleArtist": "idle_artist",
             "idleAlbum": "idle_album",
             "idleTitle": "idle_title",
+            "enableRecognition": "enable_recognition",
             "continuousId": "continuous_id",
             "silenceGapSeconds": "silence_gap",
             "dimMinutes": "dim_minutes",
@@ -993,6 +1042,7 @@ def main():
     # 2. Tone DSP & Soundcard Hardware
     app.router.add_get('/api/tone', get_tone)
     app.router.add_post('/api/tone', save_tone)
+    app.router.add_get('/api/audio-level', get_audio_level)
 
     # 3. OwnTone Multi-Room AirPlay Outputs
     app.router.add_get('/api/owntone/outputs', get_owntone_outputs)

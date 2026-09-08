@@ -156,14 +156,18 @@ If you connect an HDMI monitor, TV, or Raspberry Pi Touchscreen to display the l
 ## 🎧 How to Use
 
 1. **Drop the Needle**: Start playing a record on your turntable.
-2. **Select Speakers**: Open the AnalogAir dashboard at `http://<your-pi-ip>:3000`, go to the **Speakers** tab, and toggle your AirPlay or Chromecast speakers on.
-3. **Auto-Connect**: Click the ⭐ star next to any speaker to set it as an auto-connect target every time your Raspberry Pi boots.
-4. **Tone & Gain Controls**:
+2. **Recognition Modes (Resource Saver vs. Live Album Identification)**:
+   - **Default Mode (No Recognition / Resource Saver)**: Upon installation, AnalogAir defaults to Resource Saver Mode. Music streams immediately through PipeWire to OwnTone and your AirPlay speakers with **zero CPU/RAM overhead**. The screen displays your default turntable art and custom labels, and no Shazam lookups or listening history logs are performed. This ensures low-power boards (Raspberry Pi Zero, 1, 2, 3) operate with maximum responsiveness.
+   - **Enable Live Album Identification**: When you are ready for automatic vinyl identification, open the dashboard at `http://<your-pi-ip>:3000`, click **Controls**, and in either the **Now Playing** tab or the **Settings** tab, toggle **Enable Album Identification** on. AnalogAir will now use Shazam acoustic fingerprinting and MusicBrainz to automatically detect album covers and save records to the **Played Albums** tab.
+3. **Select Speakers**: Open the AnalogAir dashboard at `http://<your-pi-ip>:3000`, go to the **Speakers** tab, and toggle your AirPlay or Chromecast speakers on.
+4. **Auto-Connect**: Click the ⭐ star next to any speaker to set it as an auto-connect target every time your Raspberry Pi boots.
+5. **Tone & Gain Controls**:
    - Go to the **Tone** tab in the dashboard.
    - Choose your audio input card from the **Active Audio Capture Interface** dropdown.
-   - Adjust the **Input Preamp** slider to achieve optimal signal strength without clipping.
+   - **Line Level Input Monitor**: Toggle on the **Line Level Input Monitor** near the gain controls to test your turntable signal hotness. A studio-grade LED ladder meter displays average RMS and peak dBFS (-48 to 0 dBFS) with color-coded safety zones (green safe, amber optimal sweet spot, red clipping risk).
+     > *Note*: Due to PipeWire and ALSA audio driver buffering, meter readings reflect recent capture (~2–4 seconds delay) rather than instantaneous zero-latency peaks. Play a loud section of your vinyl record, verify that peaks stay in the optimal range (-12 to -3 dBFS) without hitting red (0 dBFS / clipping), and turn the monitor off when finished to keep Raspberry Pi CPU usage at 0%.
+   - Adjust the **Input Preamp** slider to achieve optimal signal strength without analog or digital clipping.
    - Fine-tune your sound with the **Bass**, **Mid**, and **Treble** sliders.
-5. **Live Artwork**: As songs play, AnalogAir automatically identifies the track, displays album cover art, and logs it to your listening history.
 
 ---
 

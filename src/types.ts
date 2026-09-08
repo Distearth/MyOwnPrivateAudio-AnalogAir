@@ -35,6 +35,19 @@ export interface AudioDevice {
   channels: number;
 }
 
+export interface AudioLevelData {
+  rms: number;
+  rawRms: number;
+  dbfs: number;
+  peakDbfs: number;
+  gainDb: number;
+  isClipping: boolean;
+  isHot: boolean;
+  isOptimal: boolean;
+  status: 'playing' | 'idle' | 'detecting' | 'silence_grace';
+  timestamp: number;
+}
+
 export interface ReleaseOverride {
   trackKey: string;
   customArtist: string;
@@ -86,6 +99,7 @@ export interface SystemPreferences {
   idleArtist: string;
   idleAlbum: string;
   idleTitle: string;
+  enableRecognition: boolean;
   continuousId: boolean;
   silenceGapSeconds: number;
   dimMinutes: number;
