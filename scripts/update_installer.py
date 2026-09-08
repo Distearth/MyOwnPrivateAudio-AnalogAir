@@ -458,6 +458,49 @@ systemctl --user enable --now analogair-web.service
 # Enable lingering so user services keep running on headless boot
 sudo loginctl enable-linger "$CONF_USER"
 
+# 9. Configure Hardware Power Switch (Physical Pins 5 & 6 / GPIO 3 + GND)
+echo ""
+echo -e "${{YELLOW}}[Bonus] Configuring Hardware Power Switch (Physical Pins 5 & 6)${{NC}}"
+
+# 1. Enable kernel gpio-shutdown overlay in /boot/firmware/config.txt or /boot/config.txt
+CONFIG_TXT=""
+if [ -f /boot/firmware/config.txt ]; then
+    CONFIG_TXT="/boot/firmware/config.txt"
+elif [ -f /boot/config.txt ]; then
+    CONFIG_TXT="/boot/config.txt"
+fi
+
+if [ -n "$CONFIG_TXT" ]; then
+    if ! grep -q "dtoverlay=gpio-shutdown" "$CONFIG_TXT" 2>/dev/null; then
+        echo "Configuring gpio-shutdown on physical Pins 5 & 6 in $CONFIG_TXT..."
+        echo "" | sudo tee -a "$CONFIG_TXT" >/dev/null
+        echo "# AnalogAir: Instant Hardware Power Switch (Physical Pins 5 & 6 / GPIO 3 + GND)" | sudo tee -a "$CONFIG_TXT" >/dev/null
+        echo "dtoverlay=gpio-shutdown,gpio_pin=3,active_low=1,gpio_pull=up" | sudo tee -a "$CONFIG_TXT" >/dev/null
+    fi
+fi
+
+# 2. Configure systemd-logind to trigger immediate clean poweroff without GUI menu
+sudo mkdir -p /etc/systemd/logind.conf.d
+cat << 'LOGEOF' | sudo tee /etc/systemd/logind.conf.d/analogair-power.conf >/dev/null
+[Login]
+HandlePowerKey=poweroff
+PowerKeyIgnoreInhibited=yes
+LOGEOF
+
+# 3. Bypass graphical desktop shutdown menu (pishutdown)
+cat << 'SHUTEOF' | sudo tee /usr/local/bin/pishutdown >/dev/null
+#!/bin/sh
+# AnalogAir: Instant physical power-switch shutdown (bypasses graphical confirmation dialog)
+systemctl poweroff || sudo shutdown -h now
+SHUTEOF
+sudo chmod +x /usr/local/bin/pishutdown
+
+# 4. Passwordless sudo permissions for clean shutdown and reboot commands
+cat << SUDOEOF | sudo tee /etc/sudoers.d/analogair-power >/dev/null
+$CONF_USER ALL=(ALL) NOPASSWD: /bin/systemctl poweroff, /bin/systemctl reboot, /sbin/shutdown, /sbin/poweroff, /sbin/reboot
+SUDOEOF
+sudo chmod 0440 /etc/sudoers.d/analogair-power
+
 # Trigger OwnTone library rescan to index the pipe
 curl -s -X POST http://127.0.0.1:3689/api/library/rescan 2>/dev/null || true
 
@@ -476,6 +519,7 @@ echo -e " 2. AnalogAir Web / Touchscreen:  ${{BLUE}}http://${{PI_IP}}:3000${{NC}
 echo " 3. Audio Pipe Location:          $CONF_MUSIC_DIR/AnalogAir/AnalogAir"
 echo " 4. Live Artwork:                 $CONF_MUSIC_DIR/AnalogAir/AnalogAir.jpg"
 echo " 5. Standby Artwork:              $CONF_MUSIC_DIR/AnalogAir/AnalogAir_default.jpg"
+echo " 6. Hardware Power Button:        Pins 5 & 6 (GPIO 3 + GND) -> Immediate Safe Shutdown & Wake"
 echo ""
 echo "Next Steps:"
 echo " - Connect your turntable / USB capture card to any USB port on your Pi."

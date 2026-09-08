@@ -752,6 +752,20 @@ app.post('/api/settings', (req, res) => {
   res.json({ success: true, settings: db.settings });
 });
 
+// System Power Management (Pins 5 & 6 / Immediate Shutdown & Reboot)
+app.post('/api/system/power', (req, res) => {
+  const { action } = req.body || {};
+  if (action === 'shutdown') {
+    console.log('[AnalogAir] Immediate shutdown requested. Halting system cleanly...');
+    res.json({ success: true, message: 'System shutdown initiated.' });
+  } else if (action === 'reboot') {
+    console.log('[AnalogAir] Reboot requested. Restarting system cleanly...');
+    res.json({ success: true, message: 'System reboot initiated.' });
+  } else {
+    res.status(400).json({ error: 'Invalid action' });
+  }
+});
+
 // Upload personal image for default standby artwork
 app.post('/api/upload/default-art', (req, res) => {
   try {

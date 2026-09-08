@@ -1059,6 +1059,23 @@ async def save_settings(request):
 
     return web.json_response({"success": True, "settings": data})
 
+# --- 7b. System Power Management ---
+async def handle_system_power(request):
+    try:
+        data = await request.json()
+        action = data.get("action", "shutdown")
+        if action == "shutdown":
+            print("[AnalogAir Web] Immediate shutdown requested. Halting system cleanly...", flush=True)
+            subprocess.Popen(["sudo", "systemctl", "poweroff"])
+            return web.json_response({"success": True, "message": "System shutdown initiated."})
+        elif action == "reboot":
+            print("[AnalogAir Web] Reboot requested. Restarting system cleanly...", flush=True)
+            subprocess.Popen(["sudo", "systemctl", "reboot"])
+            return web.json_response({"success": True, "message": "System reboot initiated."})
+        return web.json_response({"error": "Invalid action"}, status=400)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
 # --- 8. Artwork Serving & Upload ---
 NO_CACHE_HEADERS = {
     "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -1262,6 +1279,7 @@ def main():
     # 6. System Preferences & Settings
     app.router.add_get('/api/settings', get_settings)
     app.router.add_post('/api/settings', save_settings)
+    app.router.add_post('/api/system/power', handle_system_power)
 
     # 7. Artwork Serving & Uploads
     app.router.add_get('/api/artwork/current.jpg', serve_current_art)

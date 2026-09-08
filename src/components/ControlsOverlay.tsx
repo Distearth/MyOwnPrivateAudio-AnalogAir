@@ -34,7 +34,8 @@ import {
   AlertCircle,
   RefreshCw,
   Monitor,
-  HardDrive
+  HardDrive,
+  Power
 } from 'lucide-react';
 import {
   NowPlayingState,
@@ -87,7 +88,23 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
   const [isUploadingArt, setIsUploadingArt] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isDraggingArt, setIsDraggingArt] = useState(false);
+  const [powerActionStatus, setPowerActionStatus] = useState<string | null>(null);
+  const [showPowerConfirm, setShowPowerConfirm] = useState<'shutdown' | 'reboot' | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleTriggerPower = async (action: 'shutdown' | 'reboot') => {
+    try {
+      setShowPowerConfirm(null);
+      setPowerActionStatus(action === 'shutdown' ? 'Shutting down system immediately...' : 'Restarting system cleanly...');
+      await fetch('/api/system/power', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
+    } catch {
+      // Disconnection expected as Pi shuts down or restarts
+    }
+  };
 
   const handleFileUpload = async (file: File) => {
     if (!file.type.startsWith('image/')) {
@@ -963,6 +980,158 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                     <pre className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl font-mono text-xs text-amber-300 overflow-x-auto">
                       systemctl --user status analogair-web.service --no-pager
                     </pre>
+                  </div>
+                </div>
+              </div>
+
+              {/* Hardware Power Switch (Physical Pins 5 & 6) & System Shutdown */}
+              <div className="p-5 bg-neutral-950/80 border border-neutral-800 rounded-2xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2 font-bold text-neutral-100 text-sm">
+                      <Power className="w-4 h-4 text-rose-400" />
+                      <span>Hardware Power Switch & System Shutdown</span>
+                      <span className="px-2 py-0.5 text-[10px] font-bold bg-rose-950/60 text-rose-300 border border-rose-800/50 rounded-full">
+                        Pins 5 & 6 (GPIO 3 + GND)
+                      </span>
+                    </div>
+                    <p className="text-xs text-neutral-400 mt-1 leading-relaxed">
+                      Instant operating system shutdown when shorted — with all desktop confirmation dialogs bypassed so shutdown begins immediately. When powered off, shorting the same pins wakes and powers on your Raspberry Pi.
+                    </p>
+                  </div>
+                </div>
+
+                {powerActionStatus && (
+                  <div className="p-3 bg-rose-950/40 border border-rose-800/60 rounded-xl text-xs text-rose-200 flex items-center gap-2 animate-pulse">
+                    <Power className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>{powerActionStatus}</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* Card 1: Physical Wiring Diagram & Behavior */}
+                  <div className="p-4 bg-neutral-900/60 border border-neutral-800 rounded-xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
+                        <Cpu className="w-3.5 h-3.5 text-rose-400" />
+                        40-Pin Header Wiring Diagram
+                      </span>
+                      <span className="text-[10px] text-neutral-500 font-mono">Standard Pi Header</span>
+                    </div>
+
+                    {/* Pin Header Visualizer */}
+                    <div className="p-3 bg-neutral-950 border border-neutral-800/80 rounded-lg font-mono text-[11px] text-neutral-400 space-y-1 overflow-x-auto">
+                      <div className="flex justify-between text-neutral-500 text-[10px] pb-1 border-b border-neutral-800">
+                        <span>Left Col (Odd Pins)</span>
+                        <span>Right Col (Even Pins)</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Pin 1: 3.3V Power</span>
+                        <span>Pin 2: 5V Power</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Pin 3: GPIO 2 (SDA)</span>
+                        <span>Pin 4: 5V Power</span>
+                      </div>
+                      <div className="flex justify-between font-bold text-rose-300 bg-rose-950/40 px-1 py-0.5 rounded border border-rose-800/40">
+                        <span>★ Pin 5: GPIO 3 (SCL) [SW]</span>
+                        <span>★ Pin 6: GND (Ground) [SW]</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Pin 7: GPIO 4</span>
+                        <span>Pin 8: GPIO 14 (TXD)</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 text-xs text-neutral-300 leading-relaxed">
+                      <p>
+                        <strong className="text-rose-400">Instant Shutdown (No Menu):</strong> Connect any momentary push button or switch across <strong>Pin 5</strong> and <strong>Pin 6</strong>. When pressed, AnalogAir immediately halts and shuts down the Raspberry Pi safely without displaying any desktop GUI prompt.
+                      </p>
+                      <p>
+                        <strong className="text-emerald-400">Power-On Wake:</strong> When the Pi is halted, pressing the switch grounds GPIO 3, which signals the hardware PMIC to boot up the system automatically.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Card 2: Software Instant Shutdown & Verification */}
+                  <div className="p-4 bg-neutral-900/60 border border-neutral-800 rounded-xl space-y-3 flex flex-col justify-between">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
+                          <Power className="w-3.5 h-3.5 text-amber-400" />
+                          Software System Power Controls
+                        </span>
+                        <span className="text-[10px] text-neutral-500">Graceful Unmount</span>
+                      </div>
+                      <p className="text-xs text-neutral-400 leading-relaxed">
+                        Safely unmount filesystems, commit SQLite album recognition history, close active audio pipes, and shut down the Raspberry Pi immediately.
+                      </p>
+                    </div>
+
+                    {showPowerConfirm ? (
+                      <div className="p-3 bg-rose-950/30 border border-rose-800/60 rounded-xl space-y-2.5">
+                        <div className="text-xs font-semibold text-rose-300 flex items-center gap-1.5">
+                          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                          <span>Confirm immediate {showPowerConfirm === 'shutdown' ? 'system shutdown' : 'system reboot'}?</span>
+                        </div>
+                        <p className="text-[11px] text-neutral-400">
+                          {showPowerConfirm === 'shutdown'
+                            ? 'All database sessions and audio streams will be cleanly stopped, and the Pi will power off.'
+                            : 'All services will restart and the Raspberry Pi will reboot in ~30 seconds.'}
+                        </p>
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            onClick={() => handleTriggerPower(showPowerConfirm)}
+                            className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold transition-colors"
+                          >
+                            Yes, {showPowerConfirm === 'shutdown' ? 'Shut Down Now' : 'Reboot Now'}
+                          </button>
+                          <button
+                            onClick={() => setShowPowerConfirm(null)}
+                            className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded-lg text-xs font-medium transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            onClick={() => setShowPowerConfirm('shutdown')}
+                            className="p-2.5 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 hover:border-rose-700 text-rose-300 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <Power className="w-3.5 h-3.5" />
+                            <span>Shut Down Now</span>
+                          </button>
+                          <button
+                            onClick={() => setShowPowerConfirm('reboot')}
+                            className="p-2.5 bg-amber-950/40 hover:bg-amber-900/60 border border-amber-800/60 hover:border-amber-700 text-amber-300 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            <span>Restart Pi</span>
+                          </button>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">
+                            Verify Hardware Overlay Status:
+                          </label>
+                          <div className="p-2 bg-neutral-950 border border-neutral-800 rounded-lg flex items-center justify-between font-mono text-[11px] text-neutral-300">
+                            <span className="truncate mr-2">
+                              grep -i gpio-shutdown /boot/firmware/config.txt || grep -i gpio-shutdown /boot/config.txt
+                            </span>
+                            <button
+                              onClick={() => copyCommand('grep -i gpio-shutdown /boot/firmware/config.txt || grep -i gpio-shutdown /boot/config.txt', 'check-gpio')}
+                              className="p-1 hover:bg-neutral-800 rounded text-neutral-400 hover:text-white shrink-0"
+                              title="Copy Command"
+                            >
+                              {copiedCmdId === 'check-gpio' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
