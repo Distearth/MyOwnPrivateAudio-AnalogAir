@@ -48,6 +48,36 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def sanitize_album_title(title: str) -> str:
+    if not title:
+        return ""
+    cleaned = title
+    patterns = [
+        # Parenthetical or bracketed notes containing remaster, edition, mix, anniversary, or mastering credits
+        r"\s*[\(\[][^()\[\]]*(?:re-?master|remix|edition|version|soundtrack|anniversary|deluxe|expanded|legacy|bonus\s+track|mastered\s+by|master\s+by|half-speed)[^()\[\]]*(?:[\)\]]|$)",
+        # Hyphenated suffixes
+        r"\s*-\s*.*?(?:re-?master|mastered\s+by|deluxe|anniversary).*$",
+        r"\s*-\s*(?:single|ep)\s*$",
+        r"\s*[\(\[]\s*(?:single|ep)\s*[\)\]]$",
+    ]
+    for pat in patterns:
+        cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip(" -–—()[]").strip()
+    return cleaned if cleaned else title
+
+def sanitize_track_title(title: str) -> str:
+    if not title:
+        return ""
+    cleaned = title
+    patterns = [
+        r"\s*[\(\[][^()\[\]]*(?:re-?master|remix|edition|version|soundtrack|anniversary|deluxe|expanded|legacy|bonus\s+track|mastered\s+by|master\s+by|half-speed)[^()\[\]]*(?:[\)\]]|$)",
+        r"\s*-\s*.*?(?:re-?master|mastered\s+by|deluxe|anniversary).*$",
+    ]
+    for pat in patterns:
+        cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip(" -–—()[]").strip()
+    return cleaned if cleaned else title
+
 def init_db():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with get_db() as conn:
@@ -152,8 +182,8 @@ async def get_state(request):
     has_daemon_state = bool(state)
     status = state.get("status", "idle")
     artist = state.get("artist", idle_artist)
-    album = state.get("album", idle_album)
-    title = state.get("title", idle_title)
+    album = sanitize_album_title(state.get("album", idle_album))
+    title = sanitize_track_title(state.get("title", idle_title))
     rms = state.get("rms", 0.0)
     matched_via = state.get("matched_via", "idle_default" if status == "idle" else "shazam")
     mbid = state.get("mbid")
@@ -161,7 +191,15 @@ async def get_state(request):
     if not has_daemon_state:
         status = "idle"
 
-    art_url = "/api/artwork/current.jpg"
+    if status == "idle":
+        art_url = ""
+    else:
+        raw_art = state.get("art_url") or state.get("artUrl") or ""
+        if raw_art.startswith("http"):
+            art_url = raw_art
+        else:
+            v_tag = int(LIVE_ART_PATH.stat().st_mtime) if LIVE_ART_PATH.exists() else int(time.time())
+            art_url = f"/api/artwork/current.jpg?v={v_tag}"
 
     return web.json_response({
         "status": status,
@@ -479,7 +517,7 @@ async def search_itunes(request):
                         art100 = item.get("artworkUrl100", "")
                         art1400 = art100.replace("100x100bb", "1400x1400bb") if art100 else ""
                         results.append({
-                            "album": item.get("collectionName", ""),
+                            "album": sanitize_album_title(item.get("collectionName", "")),
                             "artist": item.get("artistName", ""),
                             "releaseDate": item.get("releaseDate", "")[:4] if item.get("releaseDate") else "",
                             "trackCount": item.get("trackCount", 0),
@@ -511,7 +549,7 @@ async def search_musicbrainz(request):
                             art100 = item.get("artworkUrl100", "")
                             candidates.append({
                                 "id": f"itunes-{item.get('collectionId')}",
-                                "title": item.get("collectionName", ""),
+                                "title": sanitize_album_title(item.get("collectionName", "")),
                                 "artist": item.get("artistName", ""),
                                 "year": item.get("releaseDate", "")[:4] if item.get("releaseDate") else "Release",
                                 "format": '12" Vinyl',
@@ -774,29 +812,33 @@ async def save_settings(request):
     return web.json_response({"success": True, "settings": data})
 
 # --- 8. Artwork Serving & Upload ---
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0"
+}
+
 async def serve_current_art(request):
     if LIVE_ART_PATH.exists() and LIVE_ART_PATH.stat().st_size > 500:
-        return web.FileResponse(LIVE_ART_PATH)
-    if DEFAULT_ART_PATH.exists() and DEFAULT_ART_PATH.stat().st_size > 500:
-        return web.FileResponse(DEFAULT_ART_PATH)
-    if FALLBACK_ART_PATH.exists():
-        return web.FileResponse(FALLBACK_ART_PATH)
-    if FALLBACK_SRC_ART.exists():
-        return web.FileResponse(FALLBACK_SRC_ART)
-    return web.Response(status=404)
+        return web.FileResponse(LIVE_ART_PATH, headers=NO_CACHE_HEADERS)
+    return await serve_standby_art(request)
 
 async def serve_standby_art(request):
     if DEFAULT_ART_PATH.exists() and DEFAULT_ART_PATH.stat().st_size > 500:
-        return web.FileResponse(DEFAULT_ART_PATH)
-    if FALLBACK_ART_PATH.exists():
-        return web.FileResponse(FALLBACK_ART_PATH)
-    if FALLBACK_SRC_ART.exists():
-        return web.FileResponse(FALLBACK_SRC_ART)
+        return web.FileResponse(DEFAULT_ART_PATH, headers=NO_CACHE_HEADERS)
+    for fallback in [
+        UI_DIR / "assets" / "default_vinyl.jpg",
+        UI_DIR / "assets" / "default_idle.jpg",
+        FALLBACK_ART_PATH,
+        FALLBACK_SRC_ART
+    ]:
+        if fallback.exists() and fallback.stat().st_size > 500:
+            return web.FileResponse(fallback, headers=NO_CACHE_HEADERS)
     return web.Response(status=404)
 
 async def serve_live_pipe_art(request):
     if LIVE_ART_PATH.exists():
-        return web.FileResponse(LIVE_ART_PATH)
+        return web.FileResponse(LIVE_ART_PATH, headers=NO_CACHE_HEADERS)
     return await serve_standby_art(request)
 
 async def upload_default_art(request):
@@ -832,174 +874,7 @@ async def upload_default_art(request):
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
-# --- 9. Needle Drop & Silence Simulation Triggers ---
-SIMULATION_PRESETS = [
-    {
-        "artist": "Pink Floyd",
-        "album": "The Dark Side of the Moon",
-        "title": "Breathe (In the Air)",
-        "artUrl": "https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=1000&q=80",
-        "mbid": "a30f30c6-3023-3f18-be48-6a3f1246d7e0",
-        "matchedVia": "local_override"
-    },
-    {
-        "artist": "Miles Davis",
-        "album": "Kind of Blue (180g Vinyl Edition)",
-        "title": "Freddie Freeloader",
-        "artUrl": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1000&q=80",
-        "mbid": "4979e27c-fb8d-3687-b99b-4392949ff736",
-        "matchedVia": "musicbrainz"
-    },
-    {
-        "artist": "Daft Punk",
-        "album": "Random Access Memories",
-        "title": "Give Life Back to Music",
-        "artUrl": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1000&q=80",
-        "mbid": "018f60ff-3d02-4ec4-9d62-ce46c4f3ca4e",
-        "matchedVia": "shazam"
-    }
-]
-
-_sim_index = 0
-
-async def simulate_needle_drop(request):
-    global _sim_index
-    preset = SIMULATION_PRESETS[_sim_index % len(SIMULATION_PRESETS)]
-    _sim_index += 1
-
-    now_iso = datetime.now().isoformat()
-    state = {
-        "status": "playing",
-        "artist": preset["artist"],
-        "album": preset["album"],
-        "title": preset["title"],
-        "artUrl": preset["artUrl"],
-        "mbid": preset["mbid"],
-        "sourceType": "vinyl",
-        "isContinuous": True,
-        "sideLocked": True,
-        "playCount": 1,
-        "rms": 0.22,
-        "sampleRate": 44100,
-        "bitDepth": 16,
-        "matched_via": preset["matchedVia"],
-        "startedAt": now_iso
-    }
-    try:
-        with open(STATE_FILE, "w") as f:
-            json.dump(state, f)
-    except Exception:
-        pass
-
-    sess_id = f"sess-{int(time.time()*1000)}"
-    with get_db() as conn:
-        existing = conn.execute("SELECT id, play_count FROM sessions WHERE artist=? AND album=?", (preset["artist"], preset["album"])).fetchone()
-        if existing:
-            conn.execute("UPDATE sessions SET play_count = play_count + 1, played_at = CURRENT_TIMESTAMP WHERE id=?", (existing["id"],))
-        else:
-            conn.execute("""
-                INSERT INTO sessions (id, artist, album, first_track, art_url, played_at, play_count, mbid, has_override)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1, ?, 0)
-            """, (sess_id, preset["artist"], preset["album"], preset["title"], preset["artUrl"], preset["mbid"]))
-        conn.commit()
-
-    if preset["artUrl"].startswith("http"):
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(preset["artUrl"], timeout=4) as resp:
-                    if resp.status == 200:
-                        content = await resp.read()
-                        with open(LIVE_ART_PATH, "wb") as f:
-                            f.write(content)
-            except Exception:
-                pass
-
-    write_to_metadata_pipe(preset["title"], preset["artist"], preset["album"])
-
-    return web.json_response({
-        "success": True,
-        "state": {
-            "status": "playing",
-            "artist": preset["artist"],
-            "album": preset["album"],
-            "title": preset["title"],
-            "artUrl": "/api/artwork/current.jpg",
-            "mbid": preset["mbid"],
-            "sourceType": "vinyl",
-            "isContinuous": True,
-            "sideLocked": True,
-            "playCount": 1,
-            "rmsLevel": 0.22,
-            "sampleRate": 44100,
-            "bitDepth": 16,
-            "inputDeviceName": "AnalogAir Vinyl (PipeWire Capture)",
-            "matchedVia": preset["matchedVia"],
-            "startedAt": now_iso
-        }
-    })
-
-async def simulate_silence(request):
-    settings = {}
-    with get_db() as conn:
-        for row in conn.execute("SELECT key, value FROM settings"):
-            settings[row["key"]] = row["value"]
-
-    idle_artist = settings.get("idle_artist", "Audio-Technica")
-    idle_album = settings.get("idle_album", "AT-LP60X Turntable")
-    idle_title = settings.get("idle_title", "AnalogAir Vinyl")
-
-    now_iso = datetime.now().isoformat()
-    state = {
-        "status": "idle",
-        "artist": idle_artist,
-        "album": idle_album,
-        "title": idle_title,
-        "artUrl": "/api/artwork/custom-standby.jpg",
-        "sourceType": settings.get("source_type", "vinyl"),
-        "isContinuous": False,
-        "sideLocked": False,
-        "rms": 0.001,
-        "sampleRate": 44100,
-        "bitDepth": 16,
-        "matched_via": "idle_default",
-        "startedAt": now_iso
-    }
-    try:
-        with open(STATE_FILE, "w") as f:
-            json.dump(state, f)
-    except Exception:
-        pass
-
-    if DEFAULT_ART_PATH.exists():
-        try:
-            shutil.copyfile(DEFAULT_ART_PATH, LIVE_ART_PATH)
-        except Exception:
-            pass
-
-    write_to_metadata_pipe(idle_title, idle_artist, idle_album)
-
-    return web.json_response({
-        "success": True,
-        "state": {
-            "status": "idle",
-            "artist": idle_artist,
-            "album": idle_album,
-            "title": idle_title,
-            "artUrl": "/api/artwork/custom-standby.jpg",
-            "sourceType": settings.get("source_type", "vinyl"),
-            "isContinuous": False,
-            "sideLocked": False,
-            "playCount": 0,
-            "rmsLevel": 0.001,
-            "sampleRate": 44100,
-            "bitDepth": 16,
-            "inputDeviceName": "AnalogAir Vinyl (PipeWire Capture)",
-            "matchedVia": "idle_default",
-            "startedAt": now_iso
-        }
-    })
-
-# --- 10. Installer & Downloadable Artifacts ---
+# --- 9. Installer & Downloadable Artifacts ---
 async def download_desktop_shortcut(request):
     host = request.headers.get("Host", "localhost:3000")
     desktop_content = f"""[Desktop Entry]
@@ -1137,11 +1012,7 @@ def main():
     app.router.add_get('/api/artwork/AnalogAir.jpg', serve_live_pipe_art)
     app.router.add_post('/api/upload/default-art', upload_default_art)
 
-    # 8. Testing / Simulation Triggers
-    app.router.add_post('/api/simulate/needle-drop', simulate_needle_drop)
-    app.router.add_post('/api/simulate/silence', simulate_silence)
-
-    # 9. Downloadable Install Artifacts
+    # 8. Downloadable Install Artifacts
     app.router.add_get('/api/installer/desktop-shortcut', download_desktop_shortcut)
     app.router.add_get('/api/installer/script', download_install_script)
     app.router.add_get('/api/installer/daemon', download_daemon_script)

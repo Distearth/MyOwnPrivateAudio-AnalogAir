@@ -108,14 +108,48 @@ def get_override(track_key):
     except:
         return None
 
+def sanitize_album_title(title: str) -> str:
+    if not title:
+        return ""
+    cleaned = title
+    patterns = [
+        # Parenthetical or bracketed notes containing remaster, edition, mix, anniversary, or mastering credits
+        r"\s*[\(\[][^()\[\]]*(?:re-?master|remix|edition|version|soundtrack|anniversary|deluxe|expanded|legacy|bonus\s+track|mastered\s+by|master\s+by|half-speed)[^()\[\]]*(?:[\)\]]|$)",
+        # Hyphenated suffixes
+        r"\s*-\s*.*?(?:re-?master|mastered\s+by|deluxe|anniversary).*$",
+        r"\s*-\s*(?:single|ep)\s*$",
+        r"\s*[\(\[]\s*(?:single|ep)\s*[\)\]]$",
+    ]
+    for pat in patterns:
+        cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip(" -–—()[]").strip()
+    return cleaned if cleaned else title
+
+def sanitize_track_title(title: str) -> str:
+    if not title:
+        return ""
+    cleaned = title
+    patterns = [
+        r"\s*[\(\[][^()\[\]]*(?:re-?master|remix|edition|version|soundtrack|anniversary|deluxe|expanded|legacy|bonus\s+track|mastered\s+by|master\s+by|half-speed)[^()\[\]]*(?:[\)\]]|$)",
+        r"\s*-\s*.*?(?:re-?master|mastered\s+by|deluxe|anniversary).*$",
+    ]
+    for pat in patterns:
+        cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip(" -–—()[]").strip()
+    return cleaned if cleaned else title
+
 def restore_default_artwork():
-    try:
-        r = requests.get("http://127.0.0.1:3000/api/artwork/custom-standby.jpg", timeout=2)
-        if r.status_code == 200 and len(r.content) > 500:
-            with open(DEFAULT_ART_PATH, "wb") as f:
-                f.write(r.content)
-    except:
-        pass
+    if not os.path.exists(DEFAULT_ART_PATH) or os.path.getsize(DEFAULT_ART_PATH) < 500:
+        try:
+            img = Image.new('RGB', (1000, 1000), color='#121216')
+            draw = ImageDraw.Draw(img)
+            draw.ellipse([100, 100, 900, 900], outline='#2a2a32', width=8)
+            draw.ellipse([250, 250, 750, 750], outline='#222228', width=6)
+            draw.ellipse([400, 400, 600, 600], fill='#d97706')
+            draw.ellipse([480, 480, 520, 520], fill='#121216')
+            img.save(DEFAULT_ART_PATH, 'JPEG', quality=90)
+        except Exception:
+            pass
 
     if os.path.exists(DEFAULT_ART_PATH):
         try:
@@ -141,16 +175,17 @@ def make_xml(title, artist, album):
 <item><type>61727473</type><code>6173616c</code><data encoding="base64">{encode_b64(album)}</data></item>
 """
 
-def update_artwork(artist, album, mbid=None, custom_art_url=None):
-    art_url = custom_art_url
+def update_artwork(artist, album, mbid=None, custom_art_url=None, fallback_art_url=None):
+    art_url = custom_art_url or fallback_art_url
+    clean_album = sanitize_album_title(album)
     if not art_url:
         try:
-            query = f"{artist} {album}"
+            query = f"{artist} {clean_album}".strip()
             url = f"https://itunes.apple.com/search?term={requests.utils.quote(query)}&entity=album&limit=1"
             res = requests.get(url, timeout=4).json()
             if res.get("results"):
                 art_url = res["results"][0].get("artworkUrl100", "").replace("100x100bb", "1400x1400bb")
-        except:
+        except Exception:
             pass
     if not art_url and mbid:
         try:
@@ -158,18 +193,20 @@ def update_artwork(artist, album, mbid=None, custom_art_url=None):
             res = requests.get(caa_url, timeout=4)
             if res.status_code == 200:
                 art_url = caa_url
-        except:
+        except Exception:
             pass
     if art_url:
         try:
-            img_bytes = requests.get(art_url, timeout=5).content
-            image = Image.open(io.BytesIO(img_bytes))
-            if image.mode in ("RGBA", "P", "LA"):
-                image = image.convert("RGB")
-            image.save(LIVE_ART_PATH, "JPEG", quality=92)
-            return art_url
-        except:
-            pass
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            img_bytes = requests.get(art_url, headers=headers, timeout=6).content
+            if len(img_bytes) > 500:
+                image = Image.open(io.BytesIO(img_bytes))
+                if image.mode in ("RGBA", "P", "LA"):
+                    image = image.convert("RGB")
+                image.save(LIVE_ART_PATH, "JPEG", quality=92)
+                return art_url
+        except Exception as e:
+            print(f"[AnalogAir] Error saving live artwork from {art_url}: {e}", flush=True)
     restore_default_artwork()
     return None
 
@@ -410,6 +447,7 @@ async def main():
                 is_playing = False
                 session_locked = False
                 current_track_id = None
+                resolved_art = None
                 set_owntone_player("pause")
                 try:
                     with open(STATE_FILE, "w") as sf:
@@ -418,7 +456,7 @@ async def main():
                             "artist": idle_artist,
                             "album": idle_album,
                             "title": idle_title,
-                            "art_url": "/api/artwork/custom-standby.jpg",
+                            "art_url": "",
                             "rms": float(rms),
                             "matched_via": "idle_default"
                         }, sf)
@@ -426,6 +464,7 @@ async def main():
                     pass
             elif is_playing:
                 # Brief pause between tracks on vinyl side, keep playing state
+                current_art = resolved_art if (resolved_art and resolved_art.startswith("http")) else f"/api/artwork/current.jpg?t={int(time.time())}"
                 try:
                     with open(STATE_FILE, "w") as sf:
                         json.dump({
@@ -433,7 +472,7 @@ async def main():
                             "artist": last_artist,
                             "album": last_album,
                             "title": last_title,
-                            "art_url": "/api/artwork/current.jpg",
+                            "art_url": current_art,
                             "rms": float(rms),
                             "matched_via": "groove"
                         }, sf)
@@ -448,6 +487,7 @@ async def main():
 
             if not continuous_mode and session_locked:
                 # Still spinning the current identified record side
+                current_art = resolved_art if (resolved_art and resolved_art.startswith("http")) else f"/api/artwork/current.jpg?t={int(time.time())}"
                 try:
                     with open(STATE_FILE, "w") as sf:
                         json.dump({
@@ -455,7 +495,7 @@ async def main():
                             "artist": last_artist,
                             "album": last_album,
                             "title": last_title,
-                            "art_url": "/api/artwork/current.jpg",
+                            "art_url": current_art,
                             "rms": float(rms),
                             "matched_via": "shazam"
                         }, sf)
@@ -473,7 +513,7 @@ async def main():
                             "artist": idle_artist,
                             "album": "Vinyl Playback",
                             "title": "Listening & Identifying...",
-                            "art_url": "/api/artwork/current.jpg",
+                            "art_url": f"/api/artwork/current.jpg?t={int(time.time())}",
                             "rms": float(rms),
                             "matched_via": "listening"
                         }, sf)
@@ -491,9 +531,20 @@ async def main():
                         raw_artist = track.get("subtitle", idle_artist)
                         print(f"[AnalogAir] Shazam match found: '{raw_title}' by '{raw_artist}' (ID: {track_id})", flush=True)
                         if track_id != current_track_id:
-                            sections = track.get("sections", [{}])
-                            metadata = sections[0].get("metadata", [{}]) if sections else [{}]
-                            base_album = metadata[0].get("text", idle_album) if metadata else idle_album
+                            images = track.get("images", {})
+                            shazam_art = images.get("coverarthq") or images.get("coverart")
+
+                            raw_album = None
+                            for s in track.get("sections", []):
+                                for item in s.get("metadata", []):
+                                    if item.get("title", "").strip().lower() == "album":
+                                        raw_album = item.get("text", "").strip()
+                                        break
+                                if raw_album:
+                                    break
+                            if not raw_album:
+                                raw_album = idle_album
+                            base_album = sanitize_album_title(raw_album)
 
                             track_key = f"{raw_artist} - {raw_title}"
                             override = get_override(track_key)
@@ -501,7 +552,7 @@ async def main():
 
                             if override:
                                 artist = override[0] or raw_artist
-                                album = override[1]
+                                album = sanitize_album_title(override[1])
                                 custom_art_url = override[2]
                                 mbid = override[3]
                                 print(f"[AnalogAir] Applying saved local override: '{artist}' - '{album}'", flush=True)
@@ -510,12 +561,14 @@ async def main():
                                 album = base_album
                                 mbid = None
 
-                            display_title = raw_title if continuous_mode else "AnalogAir"
+                            clean_title = sanitize_track_title(raw_title)
+                            display_title = clean_title if continuous_mode else "AnalogAir"
                             last_artist = artist
                             last_album = album
                             last_title = display_title
 
-                            resolved_art = update_artwork(artist, album, mbid, custom_art_url)
+                            resolved_art = update_artwork(artist, album, mbid, custom_art_url, fallback_art_url=shazam_art)
+                            active_art_url = resolved_art if (resolved_art and resolved_art.startswith("http")) else f"/api/artwork/current.jpg?t={int(time.time())}"
                             write_to_pipe(make_xml(display_title, artist, album))
                             
                             current_track_id = track_id
@@ -530,7 +583,7 @@ async def main():
                                         "artist": artist,
                                         "album": album,
                                         "title": display_title,
-                                        "art_url": "/api/artwork/current.jpg",
+                                        "art_url": active_art_url,
                                         "rms": float(rms),
                                         "matched_via": "override" if override else "shazam"
                                     }, sf)

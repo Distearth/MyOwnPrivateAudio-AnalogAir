@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { sanitizeAlbumTitle, sanitizeTrackTitle } from '../utils/sanitize';
 import {
   X,
   Sliders,
@@ -57,8 +58,6 @@ interface ControlsOverlayProps {
   onToggleFavoriteOutput: (id: string) => void;
   onToggleMode: (continuous: boolean) => void;
   onOpenEditMetadata: () => void;
-  onSimulateNeedleDrop: () => void;
-  onSimulateSilence: () => void;
   onUpdateSettings: (newSettings: Partial<SystemPreferences>) => void;
   onDeleteSession: (id: string) => void;
 }
@@ -77,8 +76,6 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
   onToggleFavoriteOutput,
   onToggleMode,
   onOpenEditMetadata,
-  onSimulateNeedleDrop,
-  onSimulateSilence,
   onUpdateSettings,
   onDeleteSession
 }) => {
@@ -278,6 +275,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                     <img
                       src={state.artUrl || '/assets/default_idle.jpg'}
                       alt=""
+                      referrerPolicy="no-referrer"
                       className="w-full h-full object-cover"
                     />
                   </div>
@@ -292,10 +290,10 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                         </span>
                       )}
                     </div>
-                    <h3 className="text-lg font-bold text-white leading-snug">{state.album}</h3>
+                    <h3 className="text-lg font-bold text-white leading-snug">{sanitizeAlbumTitle(state.album)}</h3>
                     <p className="text-sm text-neutral-400">{state.artist}</p>
                     {state.title && (
-                      <p className="text-xs text-neutral-500 font-mono">Current Track: {state.title}</p>
+                      <p className="text-xs text-neutral-500 font-mono">Current Track: {sanitizeTrackTitle(state.title)}</p>
                     )}
                   </div>
                 </div>
@@ -355,33 +353,6 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                   <p className="text-xs text-neutral-400 leading-relaxed">
                     Continuously listens and identifies individual song titles as the needle advances across track boundaries. Displays real-time song title on screen.
                   </p>
-                </div>
-              </div>
-
-              {/* Simulation Testing Suite */}
-              <div className="p-4 bg-neutral-950/40 border border-neutral-800/80 rounded-2xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-neutral-400 flex items-center gap-1.5">
-                    <Play className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Live Simulation & Testing Triggers</span>
-                  </span>
-                  <span className="text-[11px] text-neutral-500 font-mono">Test transitions without turntable</span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-2 gap-3">
-                  <button
-                    onClick={onSimulateNeedleDrop}
-                    className="p-3 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-colors border border-neutral-700"
-                  >
-                    <Disc className="w-4 h-4 text-amber-400" />
-                    <span>Drop Needle (New Record Side)</span>
-                  </button>
-                  <button
-                    onClick={onSimulateSilence}
-                    className="p-3 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-colors border border-neutral-700"
-                  >
-                    <RotateCcw className="w-4 h-4 text-sky-400" />
-                    <span>Trigger Silence (Revert to Idle)</span>
-                  </button>
                 </div>
               </div>
             </div>
@@ -677,7 +648,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-12 h-12 rounded-lg bg-neutral-900 overflow-hidden border border-neutral-800 flex-shrink-0">
-                          <img src={sess.artUrl} alt="" className="w-full h-full object-cover" />
+                          <img src={sess.artUrl} alt="" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
                         </div>
                         <div>
                           <div className="flex items-center gap-2">

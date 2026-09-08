@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Disc, Music, Sliders, Radio, Sparkles, CheckCircle2, CassetteTape, Disc3, Mic2 } from 'lucide-react';
 import { NowPlayingState, SystemPreferences } from '../types';
+import { sanitizeAlbumTitle, sanitizeTrackTitle } from '../utils/sanitize';
 import vinylDefaultArt from '../assets/images/analogair_idle_art_1788723997443.jpg';
 import tapeDefaultArt from '../assets/images/analogair_tape_art_1788735610103.jpg';
 import cdDefaultArt from '../assets/images/analogair_cd_art_1788735621912.jpg';
@@ -19,15 +20,20 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
   onOpenEditMetadata
 }) => {
   const [imageError, setImageError] = useState(false);
+  const [useLocalFallback, setUseLocalFallback] = useState(false);
   const [isFaded, setIsFaded] = useState(false);
   const isIdle = state.status === 'idle';
 
   const sourceType = settings?.sourceType || state.sourceType || 'vinyl';
 
-  // Reset image error state when artUrl updates
+  const displayAlbum = useMemo(() => sanitizeAlbumTitle(state.album), [state.album]);
+  const displayTitle = useMemo(() => sanitizeTrackTitle(state.title), [state.title]);
+
+  // Reset image error and fallback states when artUrl, album, artist, or status changes
   useEffect(() => {
     setImageError(false);
-  }, [state.artUrl]);
+    setUseLocalFallback(false);
+  }, [state.artUrl, state.album, state.artist, state.status]);
 
   // 10-Second Idle Auto-Fade Timer
   // Fades out header, footer, and edit buttons, leaving purely the artwork, artist, and title.
@@ -63,13 +69,20 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
 
   // Determine fallback artwork based on selected source type
   const defaultArtwork = useMemo(() => {
-    if (settings?.defaultArtUrl) return settings.defaultArtUrl;
+    if (settings?.defaultArtUrl && !settings.defaultArtUrl.includes('custom-standby.jpg')) {
+      return settings.defaultArtUrl;
+    }
     if (sourceType === 'tape') return tapeDefaultArt;
     if (sourceType === 'cd') return cdDefaultArt;
     return vinylDefaultArt;
   }, [settings?.defaultArtUrl, sourceType]);
 
-  const displayArt = isIdle ? defaultArtwork : (!imageError && state.artUrl ? state.artUrl : defaultArtwork);
+  const displayArt = useMemo(() => {
+    if (isIdle) return defaultArtwork;
+    if (imageError) return defaultArtwork;
+    if (useLocalFallback) return `/api/artwork/current.jpg?v=${Date.now()}`;
+    return state.artUrl || defaultArtwork;
+  }, [isIdle, imageError, useLocalFallback, state.artUrl, defaultArtwork]);
 
   // Stream label text based on source preference
   const streamLabel = useMemo(() => {
@@ -98,7 +111,7 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
   }, [isIdle, settings?.customStreamLabel, sourceType]);
 
   // Dynamic "Shrink-to-Fit" Typography Sizing based on character length
-  const albumLength = state.album?.length || 0;
+  const albumLength = displayAlbum?.length || 0;
   const albumTitleSizeClass = useMemo(() => {
     if (albumLength > 60) return 'text-xl sm:text-2xl md:text-3xl';
     if (albumLength > 40) return 'text-2xl sm:text-3xl md:text-4xl';
@@ -134,6 +147,7 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
         <img
           src={displayArt}
           alt=""
+          referrerPolicy="no-referrer"
           className="w-full h-full object-cover blur-3xl scale-125 transition-all duration-1000"
         />
       </div>
@@ -250,8 +264,16 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
           <div className="relative w-64 h-64 sm:w-80 sm:h-80 md:w-96 md:h-96 rounded-2xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.85)] border border-neutral-800/90 bg-neutral-900 transition-transform duration-500">
             <img
               src={displayArt}
-              alt={state.album}
-              onError={() => setImageError(true)}
+              alt={displayAlbum}
+              referrerPolicy="no-referrer"
+              onError={() => {
+                if (!useLocalFallback && state.artUrl && state.artUrl.startsWith('http')) {
+                  // External CDN image failed, fallback to local Pi-cached art
+                  setUseLocalFallback(true);
+                } else {
+                  setImageError(true);
+                }
+              }}
               className="w-full h-full object-cover select-none pointer-events-none transition-transform duration-700 group-hover:scale-105"
             />
 
@@ -281,7 +303,7 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
           <h1
             className={`font-extrabold text-neutral-100 tracking-tight leading-tight drop-shadow-md break-words transition-all duration-300 ${albumTitleSizeClass}`}
           >
-            {state.album}
+            {displayAlbum}
           </h1>
 
           {/* Artist Name */}
@@ -292,11 +314,11 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
           </h2>
 
           {/* Real-time Song-Level Title (When continuous recognition is on or active) */}
-          {state.isContinuous && state.title && state.title !== state.album && (
+          {state.isContinuous && displayTitle && displayTitle !== displayAlbum && (
             <div className="pt-2 flex items-center justify-center">
               <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 text-xs sm:text-sm font-semibold shadow-inner animate-in fade-in">
                 <Music className="w-3.5 h-3.5 animate-bounce" />
-                <span className="truncate max-w-xs sm:max-w-md">Track: {state.title}</span>
+                <span className="truncate max-w-xs sm:max-w-md">Track: {displayTitle}</span>
               </div>
             </div>
           )}

@@ -265,21 +265,6 @@ export default function App() {
     });
   };
 
-  const handleSimulateNeedleDrop = async () => {
-    const data = await safeJsonFetch<{ state?: NowPlayingState }>('/api/simulate/needle-drop', { method: 'POST' });
-    if (data?.state) {
-      setState(data.state);
-      fetchSessions();
-    }
-  };
-
-  const handleSimulateSilence = async () => {
-    const data = await safeJsonFetch<{ state?: NowPlayingState }>('/api/simulate/silence', { method: 'POST' });
-    if (data?.state) {
-      setState(data.state);
-    }
-  };
-
   const handleUpdateSettings = async (newSettings: Partial<SystemPreferences>) => {
     setSettings(prev => ({ ...prev, ...newSettings }));
     await safeJsonFetch('/api/settings', {
@@ -320,8 +305,6 @@ export default function App() {
         onToggleFavoriteOutput={handleToggleFavoriteOutput}
         onToggleMode={handleToggleMode}
         onOpenEditMetadata={() => setIsMetadataEditorOpen(true)}
-        onSimulateNeedleDrop={handleSimulateNeedleDrop}
-        onSimulateSilence={handleSimulateSilence}
         onUpdateSettings={handleUpdateSettings}
         onDeleteSession={handleDeleteSession}
       />
