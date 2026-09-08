@@ -68,6 +68,91 @@ OwnTone's native web player is also accessible at:
 
 ---
 
+## 🔄 Updating AnalogAir to Latest GitHub Version
+
+When updates are pushed to GitHub, services should always be stopped prior to updating to prevent file locks or collisions with the active audio FIFO pipe (`~/Music/AnalogAir/AnalogAir`) and Python processes. Once updated, services are safely restarted.
+
+### Method 1: Automated 1-Command Update (Recommended)
+
+AnalogAir includes an automated update script (`update.sh`) that stops background services, pulls the latest commits from Git, syncs virtual environment dependencies and web assets, and restarts the services:
+
+```bash
+cd ~/MyOwnPrivateAudio-AnalogAir
+chmod +x update.sh
+./update.sh
+```
+
+Or run directly in a single chained terminal line:
+```bash
+systemctl --user stop analogair-capture analogair-daemon analogair-web && cd ~/MyOwnPrivateAudio-AnalogAir && git pull origin main && ./install.sh && systemctl --user restart analogair-capture analogair-daemon analogair-web
+```
+
+### Method 2: Step-by-Step Manual Update
+
+If you prefer to perform each step manually:
+
+1. **Stop active background services**:
+   ```bash
+   systemctl --user stop analogair-capture.service analogair-daemon.service analogair-web.service
+   ```
+2. **Pull the latest code from GitHub**:
+   ```bash
+   cd ~/MyOwnPrivateAudio-AnalogAir
+   git pull origin main
+   ```
+3. **Update dependencies and sync scripts**:
+   ```bash
+   chmod +x install.sh
+   ./install.sh
+   ```
+4. **Reload systemd and restart services**:
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user restart analogair-capture.service analogair-daemon.service analogair-web.service
+   ```
+5. **Verify service status**:
+   ```bash
+   systemctl --user status analogair-web.service
+   ```
+
+---
+
+## 🖥️ Boot Modes: Headless vs. Desktop with Auto-Login
+
+AnalogAir can run either as a headless dedicated audio appliance (saving RAM and CPU) or boot directly into the Raspberry Pi OS desktop with auto-login (ideal for an HDMI screen or official Raspberry Pi Touchscreen mounted next to your turntable).
+
+### Option A: Switching to Headless Mode (Console Autologin)
+Headless mode turns off the graphical desktop environment to free ~400MB of RAM and reduce CPU overhead:
+
+- **Quick CLI command**:
+  ```bash
+  sudo raspi-config nonint do_boot_behaviour B2
+  sudo reboot
+  ```
+- **Via interactive menu**:
+  1. Run `sudo raspi-config`
+  2. Navigate to **1 System Options** &rarr; **S5 Boot / Auto Login**
+  3. Select **B2 Console Autologin**
+  4. Select **Finish** and reboot.
+
+### Option B: Returning to Desktop Mode with Auto-Login (Desktop Autologin)
+If you connect an HDMI monitor, TV, or Raspberry Pi Touchscreen to display the live spinning vinyl artwork and album covers full-screen, switch back to desktop auto-login:
+
+- **Quick CLI command**:
+  ```bash
+  sudo raspi-config nonint do_boot_behaviour B4
+  sudo reboot
+  ```
+- **Via interactive menu**:
+  1. Run `sudo raspi-config`
+  2. Navigate to **1 System Options** &rarr; **S5 Boot / Auto Login**
+  3. Select **B4 Desktop Autologin**
+  4. Select **Finish** and reboot.
+
+> **💡 Touchscreen Kiosk Tip**: In Desktop mode, you can launch Chromium in full-screen kiosk mode pointing to `http://localhost:3000` to turn your Raspberry Pi and touchscreen into a dedicated vinyl now-playing display!
+
+---
+
 ## 🎧 How to Use
 
 1. **Drop the Needle**: Start playing a record on your turntable.

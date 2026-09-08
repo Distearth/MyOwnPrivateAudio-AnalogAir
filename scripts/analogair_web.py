@@ -38,6 +38,7 @@ FALLBACK_ART_PATH = Path(__file__).resolve().parent.parent / "dist" / "assets" /
 FALLBACK_SRC_ART = Path(__file__).resolve().parent.parent / "src" / "assets" / "images" / "analogair_idle_art_1788723997443.jpg"
 
 INSTALL_SH_PATH = Path(__file__).resolve().parent.parent / "install.sh"
+UPDATE_SH_PATH = Path(__file__).resolve().parent.parent / "update.sh"
 DAEMON_SCRIPT_PATH = Path(__file__).resolve().parent / "analogair_daemon.py"
 WEB_SCRIPT_PATH = Path(__file__).resolve()
 
@@ -902,6 +903,14 @@ async def download_install_script(request):
         )
     return web.Response(text="#!/bin/bash\necho 'install.sh not found'\n", content_type="text/x-shellscript")
 
+async def download_update_script(request):
+    if UPDATE_SH_PATH.exists():
+        return web.FileResponse(
+            UPDATE_SH_PATH,
+            headers={"Content-Disposition": 'attachment; filename="update.sh"'}
+        )
+    return web.Response(text="#!/bin/bash\necho 'update.sh not found'\n", content_type="text/x-shellscript")
+
 async def download_daemon_script(request):
     if DAEMON_SCRIPT_PATH.exists():
         return web.FileResponse(
@@ -1012,9 +1021,10 @@ def main():
     app.router.add_get('/api/artwork/AnalogAir.jpg', serve_live_pipe_art)
     app.router.add_post('/api/upload/default-art', upload_default_art)
 
-    # 8. Downloadable Install Artifacts
+    # 8. Downloadable Install & Update Artifacts
     app.router.add_get('/api/installer/desktop-shortcut', download_desktop_shortcut)
     app.router.add_get('/api/installer/script', download_install_script)
+    app.router.add_get('/api/installer/update-script', download_update_script)
     app.router.add_get('/api/installer/daemon', download_daemon_script)
     app.router.add_get('/api/installer/web', download_web_script)
 

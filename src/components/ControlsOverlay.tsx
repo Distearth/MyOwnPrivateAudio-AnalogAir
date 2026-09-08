@@ -31,7 +31,10 @@ import {
   Upload,
   Image as ImageIcon,
   FileUp,
-  AlertCircle
+  AlertCircle,
+  RefreshCw,
+  Monitor,
+  HardDrive
 } from 'lucide-react';
 import {
   NowPlayingState,
@@ -79,8 +82,8 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
   onUpdateSettings,
   onDeleteSession
 }) => {
-  const [activeTab, setActiveTab] = useState<'quick' | 'tone' | 'speakers' | 'history' | 'install' | 'settings'>('quick');
-  const [copiedCmd, setCopiedCmd] = useState(false);
+  const [activeTab, setActiveTab] = useState<'quick' | 'tone' | 'speakers' | 'history' | 'update' | 'settings'>('quick');
+  const [copiedCmdId, setCopiedCmdId] = useState<string | null>(null);
   const [isUploadingArt, setIsUploadingArt] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isDraggingArt, setIsDraggingArt] = useState(false);
@@ -158,11 +161,10 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
 
   if (!isOpen) return null;
 
-  const copyInstallCommand = () => {
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://analogair.local:3000';
-    navigator.clipboard.writeText(`curl -sSL ${origin}/api/installer/script | bash`);
-    setCopiedCmd(true);
-    setTimeout(() => setCopiedCmd(false), 2000);
+  const copyCommand = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedCmdId(id);
+    setTimeout(() => setCopiedCmdId(null), 2000);
   };
 
   // Sort speakers with favorites on top
@@ -243,13 +245,13 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
             <span>Played Albums ({sessions.length})</span>
           </button>
           <button
-            onClick={() => setActiveTab('install')}
+            onClick={() => setActiveTab('update')}
             className={`py-3 px-4 border-b-2 transition-colors flex items-center gap-2 ${
-              activeTab === 'install' ? 'border-amber-500 text-amber-400 bg-amber-500/5' : 'border-transparent text-neutral-400 hover:text-neutral-200'
+              activeTab === 'update' ? 'border-amber-500 text-amber-400 bg-amber-500/5' : 'border-transparent text-neutral-400 hover:text-neutral-200'
             }`}
           >
-            <Terminal className="w-4 h-4 text-emerald-400" />
-            <span className="text-emerald-400">Pi Installer Guide</span>
+            <RefreshCw className="w-4 h-4 text-emerald-400" />
+            <span className="text-emerald-400">Update AnalogAir</span>
           </button>
           <button
             onClick={() => setActiveTab('settings')}
@@ -690,125 +692,334 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
             </div>
           )}
 
-          {/* TAB 5: RASPBERRY PI INSTALLER & ARCHITECTURE GUIDE */}
-          {activeTab === 'install' && (
+          {/* TAB 5: UPDATE ANALOGAIR & SYSTEM BOOT GUIDE */}
+          {activeTab === 'update' && (
             <div className="space-y-6 text-sm leading-relaxed">
+              {/* Header Overview Card */}
               <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
-                <h3 className="font-bold text-emerald-300 text-base mb-1">Debian 13 (Trixie) & Debian 12 Installer</h3>
+                <div className="flex items-center gap-2 font-bold text-emerald-300 text-base mb-1">
+                  <RefreshCw className="w-5 h-5 text-emerald-400" />
+                  <h3>Update AnalogAir to Latest GitHub Version</h3>
+                </div>
                 <p className="text-xs text-neutral-300">
-                  Interactive setup script that configures PipeWire zero-latency audio routing, OwnTone AirPlay/Chromecast server, metadata recognition daemon, and background systemd services.
+                  Update your Raspberry Pi installation with safe background service management. Services are paused before updating to prevent file locks or audio pipe collisions, then automatically restarted with the new code.
                 </p>
               </div>
 
-              {/* Desktop Launcher (.desktop file) */}
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2 font-bold text-amber-300 text-sm">
-                      <FileCode className="w-4 h-4 text-amber-400" />
-                      <span>Raspberry Pi Desktop 1-Click Launcher</span>
-                    </div>
-                    <p className="text-xs text-neutral-300 mt-1 leading-relaxed">
-                      Download this file to your Raspberry Pi desktop. Double-click it (or right-click &rarr; <b>Execute</b>) to automatically launch the installer in a terminal window.
-                    </p>
-                  </div>
-                  <a
-                    href="/api/installer/desktop-shortcut"
-                    download="Install-AnalogAir.desktop"
-                    className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95 flex-shrink-0"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Download Launcher (.desktop)</span>
-                  </a>
+              {/* Critical Notice: Why Services Must Be Stopped */}
+              <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl space-y-2">
+                <div className="flex items-center gap-2 font-bold text-amber-300 text-xs">
+                  <AlertCircle className="w-4 h-4 text-amber-400" />
+                  <span>Why Stop Services Before Updating?</span>
                 </div>
+                <p className="text-xs text-neutral-300 leading-relaxed">
+                  AnalogAir runs three continuous background user services: <code className="text-amber-200 font-mono">analogair-capture</code> (reading your turntable USB hardware), <code className="text-amber-200 font-mono">analogair-daemon</code> (running acoustic recognition), and <code className="text-amber-200 font-mono">analogair-web</code> (serving this web interface). Stopping them ensures that Python files, virtualenv libraries, and the audio FIFO pipe are not locked during git updates.
+                </p>
               </div>
 
-              {/* 1-Line Command */}
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
-                  1-Line Terminal Install Command
-                </label>
+              {/* Method 1: 1-Command Automated Updater (Recommended) */}
+              <div className="p-4 bg-neutral-950/80 border border-neutral-800 rounded-2xl space-y-3">
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                    Method 1: One-Line Automated Update (Recommended)
+                  </span>
+                  <p className="text-xs text-neutral-400 mt-0.5">
+                    Runs the automated updater script: stops services &rarr; pulls latest git commits &rarr; refreshes python dependencies & UI &rarr; restarts services.
+                  </p>
+                </div>
+
                 <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-xl flex items-center justify-between font-mono text-xs text-amber-300">
                   <span className="truncate mr-2">
-                    {typeof window !== 'undefined' ? `curl -sSL ${window.location.origin}/api/installer/script | bash` : 'curl -sSL http://analogair.local:3000/api/installer/script | bash'}
+                    cd ~/MyOwnPrivateAudio-AnalogAir && ./update.sh
                   </span>
                   <button
-                    onClick={copyInstallCommand}
-                    className="p-1.5 hover:bg-neutral-800 rounded-lg text-neutral-400 hover:text-white transition-colors"
+                    onClick={() => copyCommand('cd ~/MyOwnPrivateAudio-AnalogAir && ./update.sh', 'quick-update')}
+                    className="p-1.5 hover:bg-neutral-800 rounded-lg text-neutral-400 hover:text-white transition-colors flex-shrink-0"
+                    title="Copy Command"
                   >
-                    {copiedCmd ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                    {copiedCmdId === 'quick-update' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+
+                <p className="text-xs text-neutral-500">
+                  Or run with one direct chained command if preferred:
+                </p>
+                <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl flex items-center justify-between font-mono text-xs text-neutral-300">
+                  <span className="truncate mr-2 text-[11px]">
+                    systemctl --user stop analogair-capture analogair-daemon analogair-web && cd ~/MyOwnPrivateAudio-AnalogAir && git pull origin main && ./install.sh && systemctl --user restart analogair-capture analogair-daemon analogair-web
+                  </span>
+                  <button
+                    onClick={() => copyCommand('systemctl --user stop analogair-capture analogair-daemon analogair-web && cd ~/MyOwnPrivateAudio-AnalogAir && git pull origin main && ./install.sh && systemctl --user restart analogair-capture analogair-daemon analogair-web', 'full-pipe-update')}
+                    className="p-1.5 hover:bg-neutral-800 rounded-lg text-neutral-400 hover:text-white transition-colors flex-shrink-0"
+                    title="Copy Full Command"
+                  >
+                    {copiedCmdId === 'full-pipe-update' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
 
-              {/* GitHub Remote Install Notice */}
-              <div className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-2xl space-y-2">
-                <div className="flex items-center gap-2 font-bold text-sky-400 text-xs">
-                  <Share2 className="w-4 h-4" />
-                  <span>Public GitHub Deployment (Install on Any Pi)</span>
+              {/* Method 2: Step-by-Step Manual Update */}
+              <div className="p-4 bg-neutral-950/80 border border-neutral-800 rounded-2xl space-y-4">
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-sky-400">
+                    Method 2: Step-by-Step Manual Update Process
+                  </span>
+                  <p className="text-xs text-neutral-400 mt-0.5">
+                    For manual control, terminal inspection, or step-by-step verification.
+                  </p>
                 </div>
-                <p className="text-xs text-neutral-400 leading-relaxed">
-                  Want to install this easily on any fresh Raspberry Pi without having the web app running yet? You can push this project to a public repository on GitHub. Once pushed, anyone can install AnalogAir directly by running:
-                </p>
-                <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl font-mono text-xs text-neutral-300 select-all overflow-x-auto">
-                  curl -sSL https://raw.githubusercontent.com/&lt;your-github-username&gt;/analogair/main/install.sh | bash
+
+                <div className="space-y-3">
+                  {/* Step 1 */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                        <span className="w-4 h-4 rounded-full bg-neutral-800 text-neutral-300 flex items-center justify-center text-[10px] font-bold">1</span>
+                        Stop Active AnalogAir Background Services
+                      </span>
+                      <button
+                        onClick={() => copyCommand('systemctl --user stop analogair-capture analogair-daemon analogair-web', 'step-1')}
+                        className="text-[11px] text-neutral-400 hover:text-white flex items-center gap-1"
+                      >
+                        {copiedCmdId === 'step-1' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <pre className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl font-mono text-xs text-amber-300 overflow-x-auto">
+                      systemctl --user stop analogair-capture analogair-daemon analogair-web
+                    </pre>
+                  </div>
+
+                  {/* Step 2 */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                        <span className="w-4 h-4 rounded-full bg-neutral-800 text-neutral-300 flex items-center justify-center text-[10px] font-bold">2</span>
+                        Pull Latest Commits from GitHub
+                      </span>
+                      <button
+                        onClick={() => copyCommand('cd ~/MyOwnPrivateAudio-AnalogAir && git pull origin main', 'step-2')}
+                        className="text-[11px] text-neutral-400 hover:text-white flex items-center gap-1"
+                      >
+                        {copiedCmdId === 'step-2' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <pre className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl font-mono text-xs text-amber-300 overflow-x-auto">
+                      cd ~/MyOwnPrivateAudio-AnalogAir && git pull origin main
+                    </pre>
+                  </div>
+
+                  {/* Step 3 */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                        <span className="w-4 h-4 rounded-full bg-neutral-800 text-neutral-300 flex items-center justify-center text-[10px] font-bold">3</span>
+                        Sync Scripts & Update Virtual Environment
+                      </span>
+                      <button
+                        onClick={() => copyCommand('chmod +x ./install.sh && ./install.sh', 'step-3')}
+                        className="text-[11px] text-neutral-400 hover:text-white flex items-center gap-1"
+                      >
+                        {copiedCmdId === 'step-3' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <pre className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl font-mono text-xs text-amber-300 overflow-x-auto">
+                      chmod +x ./install.sh && ./install.sh
+                    </pre>
+                  </div>
+
+                  {/* Step 4 */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                        <span className="w-4 h-4 rounded-full bg-neutral-800 text-neutral-300 flex items-center justify-center text-[10px] font-bold">4</span>
+                        Reload Systemd & Restart Background Services
+                      </span>
+                      <button
+                        onClick={() => copyCommand('systemctl --user daemon-reload && systemctl --user restart analogair-capture analogair-daemon analogair-web', 'step-4')}
+                        className="text-[11px] text-neutral-400 hover:text-white flex items-center gap-1"
+                      >
+                        {copiedCmdId === 'step-4' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <pre className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl font-mono text-xs text-amber-300 overflow-x-auto">
+                      systemctl --user daemon-reload && systemctl --user restart analogair-capture analogair-daemon analogair-web
+                    </pre>
+                  </div>
+
+                  {/* Step 5 */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                        <span className="w-4 h-4 rounded-full bg-neutral-800 text-neutral-300 flex items-center justify-center text-[10px] font-bold">5</span>
+                        Verify Service Status & Health
+                      </span>
+                      <button
+                        onClick={() => copyCommand('systemctl --user status analogair-web.service --no-pager', 'step-5')}
+                        className="text-[11px] text-neutral-400 hover:text-white flex items-center gap-1"
+                      >
+                        {copiedCmdId === 'step-5' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <pre className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl font-mono text-xs text-amber-300 overflow-x-auto">
+                      systemctl --user status analogair-web.service --no-pager
+                    </pre>
+                  </div>
                 </div>
               </div>
 
-              {/* Download Individual Files */}
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
-                  Download Standalone Components
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <a
-                    href="/api/installer/script"
-                    download="install.sh"
-                    className="p-3 bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 rounded-xl flex items-center justify-between text-neutral-200 text-xs font-medium transition-colors"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Terminal className="w-4 h-4 text-amber-400" />
-                      <span>install.sh (Bash Script)</span>
-                    </span>
-                    <Download className="w-4 h-4 text-neutral-500" />
-                  </a>
-                  <a
-                    href="/api/installer/daemon"
-                    download="analogair_daemon.py"
-                    className="p-3 bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 rounded-xl flex items-center justify-between text-neutral-200 text-xs font-medium transition-colors"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Disc className="w-4 h-4 text-sky-400" />
-                      <span>analogair_daemon.py (Python)</span>
-                    </span>
-                    <Download className="w-4 h-4 text-neutral-500" />
-                  </a>
+              {/* Raspberry Pi Boot Configuration: Desktop vs Headless */}
+              <div className="p-5 bg-neutral-950/80 border border-neutral-800 rounded-2xl space-y-4">
+                <div>
+                  <div className="flex items-center gap-2 font-bold text-neutral-100 text-sm">
+                    <Monitor className="w-4 h-4 text-purple-400" />
+                    <span>Raspberry Pi Boot Configuration: Desktop vs. Headless</span>
+                  </div>
+                  <p className="text-xs text-neutral-400 mt-1 leading-relaxed">
+                    Configure your Raspberry Pi to boot either as a headless appliance (saving RAM/CPU) or directly into the desktop with auto-login (ideal for connected HDMI or official touchscreens).
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Mode 1: Desktop with Auto-Login */}
+                  <div className="p-4 bg-neutral-900/60 border border-neutral-800 rounded-xl space-y-3">
+                    <div className="flex items-center gap-2 font-bold text-purple-300 text-xs">
+                      <Monitor className="w-4 h-4 text-purple-400" />
+                      <span>Boot to Desktop with Auto-Login</span>
+                    </div>
+                    <p className="text-xs text-neutral-400 leading-relaxed">
+                      Recommended if you have an HDMI monitor, TV, or Raspberry Pi Touchscreen mounted near your turntable to display live album artwork.
+                    </p>
+                    
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
+                        1-Click Command:
+                      </label>
+                      <div className="p-2 bg-neutral-950 border border-neutral-800 rounded-lg flex items-center justify-between font-mono text-xs text-purple-300">
+                        <span className="truncate mr-2">
+                          sudo raspi-config nonint do_boot_behaviour B4 && sudo reboot
+                        </span>
+                        <button
+                          onClick={() => copyCommand('sudo raspi-config nonint do_boot_behaviour B4 && sudo reboot', 'boot-desktop')}
+                          className="p-1 hover:bg-neutral-800 rounded text-neutral-400 hover:text-white"
+                          title="Copy Command"
+                        >
+                          {copiedCmdId === 'boot-desktop' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="text-[11px] text-neutral-400 space-y-1">
+                      <span className="font-semibold text-neutral-300">Via interactive menu:</span>
+                      <ol className="list-decimal pl-4 space-y-0.5">
+                        <li>Run <code className="text-neutral-200 font-mono">sudo raspi-config</code></li>
+                        <li>Select <b>1 System Options &rarr; S5 Boot / Auto Login</b></li>
+                        <li>Choose <b>B4 Desktop Autologin</b></li>
+                        <li>Select Finish and Reboot.</li>
+                      </ol>
+                    </div>
+                  </div>
+
+                  {/* Mode 2: Headless (Console Autologin) */}
+                  <div className="p-4 bg-neutral-900/60 border border-neutral-800 rounded-xl space-y-3">
+                    <div className="flex items-center gap-2 font-bold text-emerald-300 text-xs">
+                      <HardDrive className="w-4 h-4 text-emerald-400" />
+                      <span>Boot to Headless (Console Autologin)</span>
+                    </div>
+                    <p className="text-xs text-neutral-400 leading-relaxed">
+                      Recommended if running headless in your stereo cabinet without a screen. Disables graphical desktop to save ~400MB RAM and CPU power.
+                    </p>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
+                        1-Click Command:
+                      </label>
+                      <div className="p-2 bg-neutral-950 border border-neutral-800 rounded-lg flex items-center justify-between font-mono text-xs text-emerald-300">
+                        <span className="truncate mr-2">
+                          sudo raspi-config nonint do_boot_behaviour B2 && sudo reboot
+                        </span>
+                        <button
+                          onClick={() => copyCommand('sudo raspi-config nonint do_boot_behaviour B2 && sudo reboot', 'boot-headless')}
+                          className="p-1 hover:bg-neutral-800 rounded text-neutral-400 hover:text-white"
+                          title="Copy Command"
+                        >
+                          {copiedCmdId === 'boot-headless' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="text-[11px] text-neutral-400 space-y-1">
+                      <span className="font-semibold text-neutral-300">Via interactive menu:</span>
+                      <ol className="list-decimal pl-4 space-y-0.5">
+                        <li>Run <code className="text-neutral-200 font-mono">sudo raspi-config</code></li>
+                        <li>Select <b>1 System Options &rarr; S5 Boot / Auto Login</b></li>
+                        <li>Choose <b>B2 Console Autologin</b></li>
+                        <li>Select Finish and Reboot.</li>
+                      </ol>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* Clean Audio Architecture Overview */}
-              <div className="p-4 bg-neutral-950/80 border border-neutral-800 rounded-2xl space-y-2 text-xs">
-                <div className="flex items-center gap-2 font-bold text-emerald-400">
-                  <Info className="w-4 h-4" />
-                  <span>Lossless PipeWire Audio Engine & Hardware Clock Sync</span>
+              {/* Real-Time Live Logs Section */}
+              <div className="p-4 bg-neutral-950/80 border border-neutral-800 rounded-2xl space-y-3">
+                <div className="flex items-center gap-2 font-bold text-neutral-200 text-xs">
+                  <Terminal className="w-4 h-4 text-amber-400" />
+                  <span>Real-Time Service Log Streaming (Run in Terminal)</span>
                 </div>
-                <p className="text-neutral-400 leading-relaxed">
-                  AnalogAir streams uncompressed 16-bit / 44.1kHz PCM stereo audio to your AirPlay, Chromecast, and network speakers.
-                </p>
-                <p className="text-neutral-400 leading-relaxed">
-                  PipeWire uses a real-time graph engine with hardware clock synchronization. This eliminates buffer overruns, clicks, and clock drift regardless of whether your USB sound card captures at 44.1kHz, 48kHz, or 96kHz. The 3-band parametric equalizer operates directly in kernel-space with zero latency.
-                </p>
-              </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                  <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl space-y-1">
+                    <div className="flex items-center justify-between text-neutral-300 font-medium">
+                      <span>Music Recognition</span>
+                      <button
+                        onClick={() => copyCommand('journalctl --user -u analogair-daemon -f', 'log-daemon')}
+                        className="text-neutral-400 hover:text-white"
+                        title="Copy"
+                      >
+                        {copiedCmdId === 'log-daemon' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    <code className="text-[11px] text-amber-300 font-mono block truncate">
+                      journalctl --user -u analogair-daemon -f
+                    </code>
+                  </div>
 
-              {/* Headless Switch Instructions */}
-              <div className="p-4 bg-neutral-950/80 border border-neutral-800 rounded-2xl space-y-2 text-xs">
-                <span className="font-bold text-neutral-200">Switching from Desktop to Headless Boot</span>
-                <ol className="list-decimal pl-5 space-y-1 text-neutral-400">
-                  <li>Test your vinyl audio and web interface in the Raspberry Pi desktop browser.</li>
-                  <li>Run <code className="text-amber-300 font-mono">sudo raspi-config</code> in terminal.</li>
-                  <li>Go to <b>System Options &rarr; Boot / Auto Login</b> and select <b>Console Autologin</b>.</li>
-                  <li>Reboot. The services run automatically in the background, accessible from any phone or laptop on your LAN at <code className="text-amber-300 font-mono">http://analogair.local:3000</code>.</li>
-                </ol>
+                  <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl space-y-1">
+                    <div className="flex items-center justify-between text-neutral-300 font-medium">
+                      <span>Web & DSP API</span>
+                      <button
+                        onClick={() => copyCommand('journalctl --user -u analogair-web -f', 'log-web')}
+                        className="text-neutral-400 hover:text-white"
+                        title="Copy"
+                      >
+                        {copiedCmdId === 'log-web' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    <code className="text-[11px] text-amber-300 font-mono block truncate">
+                      journalctl --user -u analogair-web -f
+                    </code>
+                  </div>
+
+                  <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl space-y-1">
+                    <div className="flex items-center justify-between text-neutral-300 font-medium">
+                      <span>Audio Hardware Capture</span>
+                      <button
+                        onClick={() => copyCommand('journalctl --user -u analogair-capture -f', 'log-capture')}
+                        className="text-neutral-400 hover:text-white"
+                        title="Copy"
+                      >
+                        {copiedCmdId === 'log-capture' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    <code className="text-[11px] text-amber-300 font-mono block truncate">
+                      journalctl --user -u analogair-capture -f
+                    </code>
+                  </div>
+                </div>
               </div>
             </div>
           )}

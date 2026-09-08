@@ -167,7 +167,7 @@ function saveData(data: StoredData) {
 
 let db = loadData();
 
-// Simulated or Live Devices
+// Detected Hardware Audio Devices
 const AUDIO_DEVICES = [
   {
     id: 'usb_audio_codec_0',
@@ -751,107 +751,7 @@ app.get('/api/artwork/AnalogAir.jpg', (req, res) => {
   res.status(404).send('AnalogAir.jpg not generated yet');
 });
 
-// 10. Simulation Triggers (For testing vinyl needle drop, track switch, silence)
-app.post('/api/simulate/needle-drop', (req, res) => {
-  const presets = [
-    {
-      artist: 'Pink Floyd',
-      album: 'The Dark Side of the Moon',
-      title: 'Breathe (In the Air)',
-      artUrl: 'https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=1000&q=80',
-      mbid: 'a30f30c6-3023-3f18-be48-6a3f1246d7e0',
-      matchedVia: 'local_override' as const
-    },
-    {
-      artist: 'Miles Davis',
-      album: 'Kind of Blue (180g Vinyl Edition)',
-      title: 'Freddie Freeloader',
-      artUrl: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1000&q=80',
-      mbid: '4979e27c-fb8d-3687-b99b-4392949ff736',
-      matchedVia: 'musicbrainz' as const
-    },
-    {
-      artist: 'Daft Punk',
-      album: 'Random Access Memories',
-      title: 'Give Life Back to Music',
-      artUrl: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1000&q=80',
-      mbid: '018f60ff-3d02-4ec4-9d62-ce46c4f3ca4e',
-      matchedVia: 'shazam' as const
-    }
-  ];
-
-  const preset = presets[Math.floor(Math.random() * presets.length)];
-  currentState = {
-    status: 'playing',
-    artist: preset.artist,
-    album: preset.album,
-    title: preset.title,
-    artUrl: preset.artUrl,
-    mbid: preset.mbid,
-    sourceType: 'vinyl',
-    isContinuous: db.settings.continuousId,
-    sideLocked: true,
-    playCount: 1,
-    rmsLevel: 0.22,
-    sampleRate: 44100,
-    bitDepth: 16,
-    inputDeviceName: 'USB Audio CODEC (Turntable Preamp USB)',
-    matchedVia: preset.matchedVia,
-    startedAt: new Date().toISOString()
-  };
-
-  // Add or increment session
-  const trackKey = `${preset.artist} - ${preset.title}`;
-  const existing = db.sessions.find(s => s.artist === preset.artist && s.album === preset.album);
-  if (existing) {
-    existing.playCount += 1;
-    existing.playedAt = new Date().toISOString();
-  } else {
-    db.sessions.unshift({
-      id: 'sess-' + Date.now(),
-      artist: preset.artist,
-      album: preset.album,
-      firstTrack: preset.title,
-      artUrl: preset.artUrl,
-      playedAt: new Date().toISOString(),
-      playCount: 1,
-      mbid: preset.mbid,
-      hasOverride: !!db.overrides[trackKey]
-    });
-  }
-  saveData(db);
-
-  // Sync identified album artwork to OwnTone pipe directory
-  syncOwnToneArtwork('album', preset.artUrl);
-
-  res.json({ success: true, state: currentState });
-});
-
-app.post('/api/simulate/silence', (req, res) => {
-  currentState = {
-    status: 'idle',
-    artist: db.settings.idleArtist,
-    album: db.settings.idleAlbum,
-    title: db.settings.idleTitle,
-    artUrl: db.settings.defaultArtUrl || '/src/assets/images/analogair_idle_art_1788723997443.jpg',
-    sourceType: db.settings.sourceType || 'vinyl',
-    isContinuous: db.settings.continuousId,
-    sideLocked: false,
-    rmsLevel: 0.001,
-    sampleRate: 44100,
-    bitDepth: 16,
-    inputDeviceName: 'USB Audio CODEC (Turntable Preamp USB)',
-    matchedVia: 'idle_default',
-    startedAt: new Date().toISOString()
-  };
-
-  // Overwrite AnalogAir.jpg with default standby artwork when silence gap is reached
-  syncOwnToneArtwork('standby');
-
-  res.json({ success: true, state: currentState });
-});
-
-// 11. Downloadable Install Script, Desktop Launcher & System Files
+// 10. Downloadable Install Script, Desktop Launcher & System Files
 app.get('/api/installer/desktop-shortcut', (req, res) => {
   const host = req.get('host') || 'localhost:3000';
   const desktopFile = `[Desktop Entry]
@@ -1218,6 +1118,13 @@ echo ""
   res.setHeader('Content-Type', 'text/x-shellscript');
   res.setHeader('Content-Disposition', 'attachment; filename="install.sh"');
   res.send(scriptContent);
+});
+
+app.get('/api/installer/update-script', (req, res) => {
+  const updateScript = fs.readFileSync(path.join(process.cwd(), 'update.sh'), 'utf-8');
+  res.setHeader('Content-Type', 'text/x-shellscript');
+  res.setHeader('Content-Disposition', 'attachment; filename="update.sh"');
+  res.send(updateScript);
 });
 
 app.get('/api/installer/daemon', (req, res) => {
