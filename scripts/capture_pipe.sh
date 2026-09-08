@@ -42,15 +42,28 @@ else
     if [ -n "$ALSA_CARD" ]; then
         ALSA_DEV="plughw:$ALSA_CARD,0"
     fi
+    # Also auto-detect USB turntable / soundcard in PulseAudio / PipeWire
+    if command -v pactl >/dev/null 2>&1; then
+        DETECTED_PULSE=$(pactl list sources short 2>/dev/null | grep -i -E "usb|codec|audio|turntable|cx231xx" | grep -v "\.monitor" | head -n1 | awk '{print $2}')
+        if [ -n "$DETECTED_PULSE" ]; then
+            PULSE_DEV="$DETECTED_PULSE"
+        fi
+    fi
+fi
+
+# Filter arguments: bypass -af if all EQ bands are 0 dB (pure bit-perfect pass-through)
+AF_ARGS=()
+if [ "$BASS" != "0" ] && [ "$BASS" != "0.0" ] || [ "$MID" != "0" ] && [ "$MID" != "0.0" ] || [ "$TREBLE" != "0" ] && [ "$TREBLE" != "0.0" ]; then
+    AF_ARGS=(-af "$EQ_FILTER")
 fi
 
 # 1. Primary: FFmpeg with real-time 3-band EQ filter graph
 if command -v ffmpeg >/dev/null 2>&1; then
     # If PulseAudio / PipeWire is running, capture via pulse
     if pactl info >/dev/null 2>&1; then
-        exec ffmpeg -loglevel error -f pulse -i "$PULSE_DEV" -af "$EQ_FILTER" -f s16le -ar 44100 -ac 2 - > "$PIPE"
+        ffmpeg -loglevel error -flush_packets 1 -f pulse -i "$PULSE_DEV" "${AF_ARGS[@]}" -f s16le -ar 44100 -ac 2 - > "$PIPE"
     else
-        exec ffmpeg -loglevel error -f alsa -i "$ALSA_DEV" -af "$EQ_FILTER" -f s16le -ar 44100 -ac 2 - > "$PIPE"
+        ffmpeg -loglevel error -flush_packets 1 -f alsa -i "$ALSA_DEV" "${AF_ARGS[@]}" -f s16le -ar 44100 -ac 2 - > "$PIPE"
     fi
 fi
 

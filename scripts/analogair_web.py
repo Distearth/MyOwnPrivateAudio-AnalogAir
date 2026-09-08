@@ -16,6 +16,7 @@ import math
 import struct
 import base64
 import urllib.parse
+import threading
 from datetime import datetime
 from pathlib import Path
 import asyncio
@@ -392,6 +393,9 @@ async def save_tone(request):
 
     if any(k in data for k in ["bassGainDb", "midGainDb", "trebleGainDb", "selectedDeviceId"]):
         try:
+            # Reset any failed state so systemd never locks out the capture service
+            subprocess.run(["systemctl", "--user", "reset-failed", "analogair-capture.service"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(["systemctl", "--user", "restart", "analogair-capture.service"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if "selectedDeviceId" in data:
@@ -400,26 +404,21 @@ async def save_tone(request):
         except Exception:
             pass
 
-    # Update PipeWire filter-chain configuration if present
+        # Trigger OwnTone to resume playing the stream if pipe was temporarily cycled
+        def resume_owntone():
+            time.sleep(0.4)
+            try:
+                subprocess.run(["curl", "-s", "-X", "POST", "http://127.0.0.1:3689/api/player/play"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0)
+            except Exception:
+                pass
+        threading.Thread(target=resume_owntone, daemon=True).start()
+
+    # Clean up any obsolete/invalid PipeWire filter-chain configuration to prevent PipeWire service failures
     pw_conf = HOME / ".config" / "pipewire" / "filter-chain.conf.d" / "analogair-tone.conf"
     if pw_conf.exists():
         try:
-            content = f'''filter.chain = [
-    {{
-        name = "analogair-tone-dsp"
-        type = "builtin"
-        label = "biquad"
-        control = {{
-            "Gain" = {float(data.get("inputGainDb", 0))}
-            "Bass" = {float(data.get("bassGainDb", 1.5))}
-            "Mid" = {float(data.get("midGainDb", 0))}
-            "Treble" = {float(data.get("trebleGainDb", 0.5))}
-        }}
-    }}
-]
-'''
-            with open(pw_conf, "w") as f:
-                f.write(content)
+            pw_conf.unlink()
         except Exception:
             pass
 
@@ -435,14 +434,13 @@ def sample_audio_levels():
     gain_db = float(settings.get("input_gain_db", 0.0))
     selected_dev = settings.get("audio_device", "").strip()
 
-    # Determine PulseAudio source
+    # Determine PulseAudio / PipeWire source
     pulse_source = "default"
     if selected_dev and selected_dev not in ["default", "@DEFAULT_SOURCE@"] and not selected_dev.startswith("hw:"):
         pulse_source = selected_dev
     elif shutil.which("pactl"):
         try:
-            # Check for specific turntable/USB capture source in pactl
-            res = subprocess.run(["pactl", "list", "sources", "short"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=1.0)
+            res = subprocess.run(["pactl", "list", "sources", "short"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=0.6)
             for line in res.stdout.splitlines():
                 parts = line.split()
                 if len(parts) >= 2:
@@ -451,53 +449,51 @@ def sample_audio_levels():
                     if not s_name.endswith(".monitor") and any(k in lower for k in ["usb", "codec", "audio", "turntable", "cx231xx"]):
                         pulse_source = s_name
                         break
+            if pulse_source == "default":
+                for line in res.stdout.splitlines():
+                    parts = line.split()
+                    if len(parts) >= 2 and not parts[1].endswith(".monitor"):
+                        pulse_source = parts[1]
+                        break
         except Exception:
             pass
 
     raw_bytes = None
 
-    # 1. Native PulseAudio client: parec (Instantaneous low-latency stream tap, same as pavucontrol)
-    if shutil.which("parec"):
+    # 1. Primary: FFmpeg non-blocking pulse tap (captures exact 100ms chunk without blocking)
+    if shutil.which("ffmpeg"):
+        try:
+            target = pulse_source if pulse_source else "default"
+            cmd = [
+                "ffmpeg", "-y", "-loglevel", "quiet",
+                "-f", "pulse", "-i", target,
+                "-t", "0.1",
+                "-f", "s16le", "-ar", "44100", "-ac", "2",
+                "-"
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=0.35)
+            if res.stdout and len(res.stdout) >= 512:
+                raw_bytes = res.stdout
+        except Exception:
+            pass
+
+    # 2. Native PulseAudio client: parec with communicate(timeout=0.2)
+    if (not raw_bytes or len(raw_bytes) < 512) and shutil.which("parec"):
         try:
             cmd = ["parec", "--raw", "--format=s16le", "--rate=44100", "--channels=2", "--latency-msec=30"]
             if pulse_source and pulse_source != "default":
                 cmd.extend(["-d", pulse_source])
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             try:
-                # 44100 * 2 ch * 2 bytes * 0.1s = 17640 bytes
-                raw_bytes = proc.stdout.read(17640)
-                proc.terminate()
-                try:
-                    proc.wait(timeout=0.1)
-                except Exception:
-                    proc.kill()
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+                raw_bytes, _ = proc.communicate(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                raw_bytes, _ = proc.communicate()
         except Exception:
             pass
 
-    # 2. FFmpeg PulseAudio tap fallback
-    if (not raw_bytes or len(raw_bytes) < 1024) and shutil.which("ffmpeg"):
-        try:
-            target = pulse_source if pulse_source else "default"
-            cmd = [
-                "ffmpeg", "-y", "-loglevel", "quiet",
-                "-f", "pulse", "-i", target,
-                "-t", "0.12",
-                "-f", "s16le", "-ar", "44100", "-ac", "2",
-                "-"
-            ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=0.5)
-            if res.stdout and len(res.stdout) >= 1024:
-                raw_bytes = res.stdout
-        except Exception:
-            pass
-
-    # 3. PipeWire pw-cat fallback
-    if not raw_bytes or len(raw_bytes) < 1024:
+    # 3. PipeWire pw-cat fallback with communicate(timeout=0.2)
+    if (not raw_bytes or len(raw_bytes) < 512):
         for tool in ["pw-record", "pw-cat"]:
             if shutil.which(tool):
                 try:
@@ -509,44 +505,30 @@ def sample_audio_levels():
                     cmd.extend(["--rate=44100", "--channels=2", "--format=s16", "--raw", "-"])
                     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
                     try:
-                        raw_bytes = proc.stdout.read(17640)
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=0.1)
-                        except Exception:
-                            proc.kill()
-                    except Exception:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-                    if raw_bytes and len(raw_bytes) >= 1024:
+                        raw_bytes, _ = proc.communicate(timeout=0.2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        raw_bytes, _ = proc.communicate()
+                    if raw_bytes and len(raw_bytes) >= 512:
                         break
                 except Exception:
                     pass
 
-    # 4. ALSA arecord direct fallback (only if PulseAudio was unavailable)
-    if (not raw_bytes or len(raw_bytes) < 1024) and shutil.which("arecord") and selected_dev.startswith("hw:"):
+    # 4. ALSA arecord direct fallback
+    if (not raw_bytes or len(raw_bytes) < 512) and shutil.which("arecord") and selected_dev.startswith("hw:"):
         try:
             cmd = ["arecord", "-q", "-D", selected_dev, "-d", "1", "-f", "S16_LE", "-r", "44100", "-c", "2"]
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             try:
-                raw_bytes = proc.stdout.read(17640)
-                proc.terminate()
-                try:
-                    proc.wait(timeout=0.1)
-                except Exception:
-                    proc.kill()
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+                raw_bytes, _ = proc.communicate(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                raw_bytes, _ = proc.communicate()
         except Exception:
             pass
 
     # Process real audio samples if captured
-    if raw_bytes and len(raw_bytes) >= 1024:
+    if raw_bytes and len(raw_bytes) >= 512:
         count = len(raw_bytes) // 2
         samples = struct.unpack(f"<{count}h", raw_bytes[:count * 2])
         left_samples = samples[0::2]
@@ -563,7 +545,6 @@ def sample_audio_levels():
         raw_peak = overall_max / 32768.0
         raw_rms = math.sqrt(overall_sq) / 32768.0
 
-        # Gain calculation (ensures quick trim buttons visually react immediately)
         gain_factor = 10.0 ** (gain_db / 20.0)
         adjusted_peak = min(1.0, raw_peak * gain_factor)
         adjusted_rms = min(1.0, raw_rms * gain_factor)
@@ -617,6 +598,9 @@ def sample_audio_levels():
         dbfs = round(20.0 * math.log10(adj_rms), 1)
         peak_rms = min(1.0, adj_rms * 1.48)
         peak_dbfs = round(20.0 * math.log10(peak_rms), 1)
+        is_clipping = peak_dbfs >= -0.5
+        is_hot = peak_dbfs >= -3.0
+        is_optimal = peak_dbfs >= -14.0 and not is_hot
         return {
             "rms": round(adj_rms, 5),
             "rawRms": round(cached_rms, 5),
@@ -625,9 +609,9 @@ def sample_audio_levels():
             "leftPeakDbfs": peak_dbfs,
             "rightPeakDbfs": peak_dbfs,
             "gainDb": gain_db,
-            "isClipping": peak_dbfs >= -0.5,
-            "isHot": peak_dbfs >= -3.0,
-            "isOptimal": peak_dbfs >= -14.0 and not is_hot,
+            "isClipping": is_clipping,
+            "isHot": is_hot,
+            "isOptimal": is_optimal,
             "status": status,
             "source": "daemon_state",
             "timestamp": time.time()
@@ -641,6 +625,9 @@ def sample_audio_levels():
         dbfs = round(20.0 * math.log10(sim_rms), 1)
         sim_peak = min(1.0, sim_rms * 1.45)
         peak_dbfs = round(20.0 * math.log10(sim_peak), 1)
+        is_clipping = peak_dbfs >= -0.5
+        is_hot = peak_dbfs >= -3.0
+        is_optimal = peak_dbfs >= -14.0 and not is_hot
         return {
             "rms": round(sim_rms, 5),
             "rawRms": 0.16,
@@ -649,9 +636,9 @@ def sample_audio_levels():
             "leftPeakDbfs": round(peak_dbfs - 0.4, 1),
             "rightPeakDbfs": round(peak_dbfs + 0.2, 1),
             "gainDb": gain_db,
-            "isClipping": peak_dbfs >= -0.5,
-            "isHot": peak_dbfs >= -3.0,
-            "isOptimal": peak_dbfs >= -14.0 and not is_hot,
+            "isClipping": is_clipping,
+            "isHot": is_hot,
+            "isOptimal": is_optimal,
             "status": "playing",
             "source": "simulated",
             "timestamp": time.time()

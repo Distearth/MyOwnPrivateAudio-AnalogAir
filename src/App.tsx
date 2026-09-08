@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { NowPlayingDisplay } from './components/NowPlayingDisplay';
 import { ControlsOverlay } from './components/ControlsOverlay';
 import { MetadataEditorModal } from './components/MetadataEditorModal';
@@ -190,14 +190,34 @@ export default function App() {
     return () => clearInterval(interval);
   }, [fetchState, fetchToneAndDevices, fetchOutputs, fetchSessions]);
 
-  // Update tone controls
-  const handleUpdateTone = async (newTone: Partial<ToneControls>) => {
+  const pendingToneRef = useRef<Partial<ToneControls>>({});
+  const toneDebounceTimerRef = useRef<any>(null);
+
+  // Update tone controls (immediate local state update, debounced network commit)
+  const handleUpdateTone = async (newTone: Partial<ToneControls>, immediate: boolean = false) => {
     setTone(prev => ({ ...prev, ...newTone }));
-    await safeJsonFetch('/api/tone', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newTone)
-    });
+    pendingToneRef.current = { ...pendingToneRef.current, ...newTone };
+
+    if (toneDebounceTimerRef.current) {
+      clearTimeout(toneDebounceTimerRef.current);
+      toneDebounceTimerRef.current = null;
+    }
+
+    const commit = async () => {
+      const payload = { ...pendingToneRef.current };
+      pendingToneRef.current = {};
+      await safeJsonFetch('/api/tone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    };
+
+    if (immediate) {
+      await commit();
+    } else {
+      toneDebounceTimerRef.current = setTimeout(commit, 350);
+    }
   };
 
   // Toggle OwnTone speaker (Enforces 100% volume by default)

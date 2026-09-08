@@ -56,7 +56,7 @@ interface ControlsOverlayProps {
   outputs: OwnToneOutput[];
   sessions: PlaySession[];
   settings: SystemPreferences;
-  onUpdateTone: (newTone: Partial<ToneControls>) => void;
+  onUpdateTone: (newTone: Partial<ToneControls>, immediate?: boolean) => void;
   onToggleOutput: (id: string) => void;
   onUpdateOutputVolume: (id: string, vol: number) => void;
   onToggleFavoriteOutput: (id: string) => void;
@@ -454,7 +454,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                     </p>
                   </div>
                   <button
-                    onClick={() => onUpdateTone({ inputGainDb: 0, bassGainDb: 0, midGainDb: 0, trebleGainDb: 0 })}
+                    onClick={() => onUpdateTone({ inputGainDb: 0, bassGainDb: 0, midGainDb: 0, trebleGainDb: 0 }, true)}
                     className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium rounded-lg border border-neutral-700 transition-colors"
                   >
                     Reset Flat (0 dB)
@@ -476,7 +476,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                   </label>
                   <select
                     value={tone?.selectedDeviceId || 'default'}
-                    onChange={(e) => onUpdateTone({ selectedDeviceId: e.target.value })}
+                    onChange={(e) => onUpdateTone({ selectedDeviceId: e.target.value }, true)}
                     className="w-full p-2.5 bg-neutral-900 border border-neutral-700 rounded-xl text-neutral-100 text-sm focus:outline-none focus:border-amber-500"
                   >
                     {Array.isArray(tone?.deviceList) && tone.deviceList.length > 0 ? (
