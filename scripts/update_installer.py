@@ -479,21 +479,28 @@ if [ -n "$CONFIG_TXT" ]; then
     fi
 fi
 
-# 2. Configure systemd-logind to trigger immediate clean poweroff without GUI menu
-sudo mkdir -p /etc/systemd/logind.conf.d
-cat << 'LOGEOF' | sudo tee /etc/systemd/logind.conf.d/analogair-power.conf >/dev/null
-[Login]
-HandlePowerKey=poweroff
-PowerKeyIgnoreInhibited=yes
-LOGEOF
+# 2. Direct systemd hardware shutdown override
+cat << 'UDEVEOF' | sudo tee /etc/udev/rules.d/99-gpio-poweroff.rules >/dev/null
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="gpio-keys*", TAG+="systemd", ENV{SYSTEMD_WANTS}="systemctl-poweroff.service"
+UDEVEOF
 
-# 3. Bypass graphical desktop shutdown menu (pishutdown)
-cat << 'SHUTEOF' | sudo tee /usr/local/bin/pishutdown >/dev/null
-#!/bin/sh
-# AnalogAir: Instant physical power-switch shutdown (bypasses graphical confirmation dialog)
-systemctl poweroff || sudo shutdown -h now
-SHUTEOF
-sudo chmod +x /usr/local/bin/pishutdown
+# 3. Custom systemd trigger service
+cat << 'SERVEOF' | sudo tee /etc/systemd/system/systemctl-poweroff.service >/dev/null
+[Unit]
+Description=AnalogAir Hardware Pin Shutdown
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl poweroff
+
+[Install]
+WantedBy=multi-user.target
+SERVEOF
+
+sudo udevadm control --reload-rules
 
 # 4. Passwordless sudo permissions for clean shutdown and reboot commands
 cat << SUDOEOF | sudo tee /etc/sudoers.d/analogair-power >/dev/null

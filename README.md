@@ -14,7 +14,7 @@ AnalogAir bridges your physical analog turntable, phono stage, or cassette deck 
 - 🎛️ **Universal Soundcard Selector**: Works out-of-the-box with *any* USB soundcard, audio hat, USB turntable, or line-in interface (e.g., Audio-Technica, Conexant CX231xx, Behringer UCA202, Focusrite Scarlett, HiFiBerry).
 - 🔍 **Real-Time Track Recognition**: Listens via acoustic fingerprinting (Shazam engine with Python 3.13 support) to identify tracks as the needle plays, fetching high-resolution album artwork and metadata.
 - ⭐ **Auto-Connect Starred Speakers**: Star your favorite speakers in the web dashboard, and AnalogAir will automatically connect and resume playback upon system boot.
-- 💻 **Modern Web Dashboard**: Mobile-responsive, dark-mode turntable interface displaying live needle state, audio level VU meters, track history, playback controls, and system service diagnostics.
+- 💻 **Modern Web Dashboard**: Mobile-responsive, dark-mode turntable interface displaying live needle state, (in development: track history, playback controls, and system service diagnostics.)
 - 🔄 **Headless Background Services**: Managed completely via systemd user services (`analogair-capture`, `analogair-daemon`, `analogair-web`) with user lingering enabled.
 
 ---
