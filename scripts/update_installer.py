@@ -140,6 +140,8 @@ sudo apt-get install -y \\
   python3-venv \\
   python3-numpy \\
   python3-pil \\
+  python3-gpiozero \\
+  python3-rpi.gpio \\
   pulseaudio-utils \\
   pavucontrol \\
   libportaudio2 \\
@@ -459,10 +461,11 @@ systemctl --user enable --now analogair-web.service
 sudo loginctl enable-linger "$CONF_USER"
 
 # 9. Configure Hardware Power Switch (Physical Pins 5 & 6 / GPIO 3 + GND)
+# Using Howchoo pi-power-button method (https://github.com/Howchoo/pi-power-button)
 echo ""
-echo -e "${{YELLOW}}[Bonus] Configuring Hardware Power Switch (Physical Pins 5 & 6)${{NC}}"
+echo -e "${{YELLOW}}[Bonus] Configuring Hardware Power Switch (Howchoo Pi Power Button)${{NC}}"
 
-# 1. Enable kernel gpio-shutdown overlay in /boot/firmware/config.txt or /boot/config.txt
+# 1. Clean up previous gpio-shutdown kernel overlay & desktop overrides
 CONFIG_TXT=""
 if [ -f /boot/firmware/config.txt ]; then
     CONFIG_TXT="/boot/firmware/config.txt"
@@ -471,36 +474,86 @@ elif [ -f /boot/config.txt ]; then
 fi
 
 if [ -n "$CONFIG_TXT" ]; then
-    if ! grep -q "dtoverlay=gpio-shutdown" "$CONFIG_TXT" 2>/dev/null; then
-        echo "Configuring gpio-shutdown on physical Pins 5 & 6 in $CONFIG_TXT..."
-        echo "" | sudo tee -a "$CONFIG_TXT" >/dev/null
-        echo "# AnalogAir: Instant Hardware Power Switch (Physical Pins 5 & 6 / GPIO 3 + GND)" | sudo tee -a "$CONFIG_TXT" >/dev/null
-        echo "dtoverlay=gpio-shutdown,gpio_pin=3,active_low=1,gpio_pull=up" | sudo tee -a "$CONFIG_TXT" >/dev/null
-    fi
+    sudo sed -i '/dtoverlay=gpio-shutdown/d' "$CONFIG_TXT" 2>/dev/null || true
+    sudo sed -i '/# AnalogAir: Instant Hardware Power Switch/d' "$CONFIG_TXT" 2>/dev/null || true
 fi
 
-# 2. Direct systemd hardware shutdown override
-cat << 'UDEVEOF' | sudo tee /etc/udev/rules.d/99-gpio-poweroff.rules >/dev/null
-ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="gpio-keys*", TAG+="systemd", ENV{SYSTEMD_WANTS}="systemctl-poweroff.service"
-UDEVEOF
+# Remove previous udev, logind, and pishutdown overrides so standard desktop logout works
+sudo rm -f /etc/udev/rules.d/99-gpio-poweroff.rules 2>/dev/null || true
+sudo rm -f /etc/systemd/system/systemctl-poweroff.service 2>/dev/null || true
+sudo rm -f /etc/systemd/logind.conf.d/analogair-power.conf 2>/dev/null || true
+sudo rm -f /usr/local/bin/pishutdown 2>/dev/null || true
+sudo udevadm control --reload-rules 2>/dev/null || true
 
-# 3. Custom systemd trigger service
-cat << 'SERVEOF' | sudo tee /etc/systemd/system/systemctl-poweroff.service >/dev/null
+# 2. Install Howchoo listen-for-shutdown script
+sudo apt-get install -y python3-gpiozero python3-rpi.gpio 2>/dev/null || true
+
+cat << 'PYEOF' | sudo tee /usr/local/bin/listen-for-shutdown.py >/dev/null
+#!/usr/bin/env python3
+"""
+Howchoo Pi Power Button (listen-for-shutdown.py)
+Source: https://github.com/Howchoo/pi-power-button
+Listens for falling edge on GPIO 3 (Physical Pin 5, paired with GND Pin 6).
+When shorted, performs an immediate clean system shutdown.
+Compatible with Pi 3, 4, 5 and all Raspberry Pi OS releases (Bookworm, Bullseye, Buster).
+"""
+import subprocess
+import sys
+
+def do_shutdown():
+    subprocess.call(['shutdown', '-h', 'now'])
+    sys.exit(0)
+
+# 1. Try gpiozero first (standard on modern Raspberry Pi OS Bookworm & Bullseye)
+try:
+    from gpiozero import Button
+    btn = Button(3, pull_up=True, bounce_time=0.1)
+    btn.wait_for_press()
+    do_shutdown()
+except Exception:
+    pass
+
+# 2. Try RPi.GPIO (standard in Howchoo pi-power-button)
+try:
+    import RPi.GPIO as GPIO
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(3, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.wait_for_edge(3, GPIO.FALLING)
+    do_shutdown()
+except Exception:
+    pass
+
+# 3. Try gpiod
+try:
+    import gpiod
+    chip = gpiod.Chip('gpiochip0')
+    line = chip.get_line(3)
+    line.request(consumer="listen-for-shutdown", type=gpiod.LINE_REQ_EV_FALLING_EDGE)
+    line.event_wait()
+    do_shutdown()
+except Exception:
+    pass
+PYEOF
+sudo chmod +x /usr/local/bin/listen-for-shutdown.py
+
+# 3. Create and enable systemd background service for listen-for-shutdown
+cat << 'SERVEOF' | sudo tee /etc/systemd/system/listen-for-shutdown.service >/dev/null
 [Unit]
-Description=AnalogAir Hardware Pin Shutdown
-DefaultDependencies=no
-Conflicts=shutdown.target
-Before=shutdown.target
+Description=Howchoo Pi Power Button Listener
+After=multi-user.target
 
 [Service]
-Type=oneshot
-ExecStart=/bin/systemctl poweroff
+Type=simple
+Restart=always
+RestartSec=2
+ExecStart=/usr/bin/python3 /usr/local/bin/listen-for-shutdown.py
 
 [Install]
 WantedBy=multi-user.target
 SERVEOF
 
-sudo udevadm control --reload-rules
+sudo systemctl daemon-reload
+sudo systemctl enable --now listen-for-shutdown.service 2>/dev/null || true
 
 # 4. Passwordless sudo permissions for clean shutdown and reboot commands
 cat << SUDOEOF | sudo tee /etc/sudoers.d/analogair-power >/dev/null

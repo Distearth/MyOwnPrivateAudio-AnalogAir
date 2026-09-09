@@ -996,7 +996,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                       </span>
                     </div>
                     <p className="text-xs text-neutral-400 mt-1 leading-relaxed">
-                      Instant operating system shutdown when shorted — with all desktop confirmation dialogs bypassed so shutdown begins immediately. When powered off, shorting the same pins wakes and powers on your Raspberry Pi.
+                      Instant operating system shutdown via dedicated Howchoo background listener (Pins 5 & 6) — cleanly powering down the Pi when shorted without triggering desktop GUI prompts or breaking your desktop logout menu. When powered off, shorting the same pins wakes and boots your Raspberry Pi.
                     </p>
                   </div>
                 </div>
@@ -1045,7 +1045,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
 
                     <div className="space-y-1.5 text-xs text-neutral-300 leading-relaxed">
                       <p>
-                        <strong className="text-rose-400">Instant Shutdown (No Menu):</strong> Connect any momentary push button or switch across <strong>Pin 5</strong> and <strong>Pin 6</strong>. When pressed, AnalogAir immediately halts and shuts down the Raspberry Pi safely without displaying any desktop GUI prompt.
+                        <strong className="text-rose-400">Instant Shutdown (No Menu):</strong> Connect any momentary switch across <strong>Pin 5 (GPIO 3)</strong> and <strong>Pin 6 (GND)</strong>. The background Howchoo daemon (<code className="text-neutral-300 font-mono text-[11px]">listen-for-shutdown.service</code>) directly catches the falling edge and shuts down the Pi cleanly without desktop dialogs or interfering with your desktop menu.
                       </p>
                       <p>
                         <strong className="text-emerald-400">Power-On Wake:</strong> When the Pi is halted, pressing the switch grounds GPIO 3, which signals the hardware PMIC to boot up the system automatically.
@@ -1115,14 +1115,14 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
 
                         <div className="space-y-1">
                           <label className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">
-                            Verify Hardware Overlay Status:
+                            Verify Howchoo Power Daemon Status:
                           </label>
                           <div className="p-2 bg-neutral-950 border border-neutral-800 rounded-lg flex items-center justify-between font-mono text-[11px] text-neutral-300">
                             <span className="truncate mr-2">
-                              grep -i gpio-shutdown /boot/firmware/config.txt || grep -i gpio-shutdown /boot/config.txt
+                              systemctl status listen-for-shutdown.service
                             </span>
                             <button
-                              onClick={() => copyCommand('grep -i gpio-shutdown /boot/firmware/config.txt || grep -i gpio-shutdown /boot/config.txt', 'check-gpio')}
+                              onClick={() => copyCommand('systemctl status listen-for-shutdown.service', 'check-gpio')}
                               className="p-1 hover:bg-neutral-800 rounded text-neutral-400 hover:text-white shrink-0"
                               title="Copy Command"
                             >
