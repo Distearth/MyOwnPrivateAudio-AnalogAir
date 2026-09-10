@@ -843,7 +843,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
 
                 <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-xl flex items-center justify-between font-mono text-xs text-amber-300">
                   <span className="truncate mr-2">
-                    cd ~/MyOwnPrivateAudio-AnalogAir && ./update.sh
+                    cd ~/MyOwnPrivateAudio-AnalogAir && bash ./update.sh
                   </span>
                   <button
                     onClick={() => copyCommand('cd ~/MyOwnPrivateAudio-AnalogAir && bash ./update.sh', 'quick-update')}
