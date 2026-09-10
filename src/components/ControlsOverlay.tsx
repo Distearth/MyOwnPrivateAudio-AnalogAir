@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { sanitizeAlbumTitle, sanitizeTrackTitle } from '../utils/sanitize';
+import { copyToClipboard } from '../utils/clipboard';
 import {
   X,
   Sliders,
@@ -178,8 +179,8 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
 
   if (!isOpen) return null;
 
-  const copyCommand = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
+  const copyCommand = async (text: string, id: string) => {
+    await copyToClipboard(text);
     setCopiedCmdId(id);
     setTimeout(() => setCopiedCmdId(null), 2000);
   };
@@ -845,7 +846,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                     cd ~/MyOwnPrivateAudio-AnalogAir && ./update.sh
                   </span>
                   <button
-                    onClick={() => copyCommand('cd ~/MyOwnPrivateAudio-AnalogAir && ./update.sh', 'quick-update')}
+                    onClick={() => copyCommand('cd ~/MyOwnPrivateAudio-AnalogAir && bash ./update.sh', 'quick-update')}
                     className="p-1.5 hover:bg-neutral-800 rounded-lg text-neutral-400 hover:text-white transition-colors flex-shrink-0"
                     title="Copy Command"
                   >
