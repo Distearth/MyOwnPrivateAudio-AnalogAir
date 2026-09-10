@@ -180,9 +180,11 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
   if (!isOpen) return null;
 
   const copyCommand = async (text: string, id: string) => {
-    await copyToClipboard(text);
-    setCopiedCmdId(id);
-    setTimeout(() => setCopiedCmdId(null), 2000);
+    const success = await copyToClipboard(text);
+    if (success) {
+      setCopiedCmdId(id);
+      setTimeout(() => setCopiedCmdId(null), 2000);
+    }
   };
 
   // Sort speakers with favorites on top
@@ -842,7 +844,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                 </div>
 
                 <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-xl flex items-center justify-between font-mono text-xs text-amber-300">
-                  <span className="truncate mr-2">
+                  <span className="truncate mr-2 select-all cursor-text" title="Click to select all">
                     cd ~/MyOwnPrivateAudio-AnalogAir && bash ./update.sh
                   </span>
                   <button
@@ -858,7 +860,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                   Or run with one direct chained command if preferred:
                 </p>
                 <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl flex items-center justify-between font-mono text-xs text-neutral-300">
-                  <span className="truncate mr-2 text-[11px]">
+                  <span className="truncate mr-2 text-[11px] select-all cursor-text" title="Click to select all">
                     systemctl --user stop analogair-capture analogair-daemon analogair-web && cd ~/MyOwnPrivateAudio-AnalogAir && git pull origin main && ./install.sh && systemctl --user restart analogair-capture analogair-daemon analogair-web
                   </span>
                   <button
@@ -978,7 +980,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                         <span>Copy</span>
                       </button>
                     </div>
-                    <pre className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl font-mono text-xs text-amber-300 overflow-x-auto">
+                    <pre className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl font-mono text-xs text-amber-300 overflow-x-auto select-all cursor-text">
                       systemctl --user status analogair-web.service --no-pager
                     </pre>
                   </div>
