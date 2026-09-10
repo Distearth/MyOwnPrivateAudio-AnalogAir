@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Disc, Music, Sliders, Radio, Sparkles, CheckCircle2, CassetteTape, Disc3, Mic2 } from 'lucide-react';
+import { Disc, Music, Sliders, Radio, Sparkles, CheckCircle2, CassetteTape, Disc3, Mic2, Maximize2, Minimize2 } from 'lucide-react';
 import { NowPlayingState, SystemPreferences } from '../types';
 import { sanitizeAlbumTitle, sanitizeTrackTitle } from '../utils/sanitize';
 import vinylDefaultArt from '../assets/images/analogair_idle_art_1788723997443.jpg';
@@ -23,7 +23,63 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
   const [useLocalFallback, setUseLocalFallback] = useState(false);
   const [fallbackLevel, setFallbackLevel] = useState<number>(0);
   const [isFaded, setIsFaded] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const isIdle = state.status === 'idle';
+
+  // Monitor document fullscreen status
+  useEffect(() => {
+    const updateFsState = () => {
+      const doc = document as any;
+      const fsElement = doc.fullscreenElement || doc.webkitFullscreenElement || doc.mozFullScreenElement || doc.msFullscreenElement;
+      setIsFullscreen(Boolean(fsElement));
+    };
+
+    updateFsState();
+    document.addEventListener('fullscreenchange', updateFsState);
+    document.addEventListener('webkitfullscreenchange', updateFsState);
+    document.addEventListener('mozfullscreenchange', updateFsState);
+    document.addEventListener('MSFullscreenChange', updateFsState);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', updateFsState);
+      document.removeEventListener('webkitfullscreenchange', updateFsState);
+      document.removeEventListener('mozfullscreenchange', updateFsState);
+      document.removeEventListener('MSFullscreenChange', updateFsState);
+    };
+  }, []);
+
+  const toggleFullscreen = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const doc = document as any;
+      const el = document.documentElement as any;
+      const isFs = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement || doc.mozFullScreenElement || doc.msFullscreenElement);
+
+      if (!isFs) {
+        if (el.requestFullscreen) {
+          await el.requestFullscreen();
+        } else if (el.webkitRequestFullscreen) {
+          await el.webkitRequestFullscreen();
+        } else if (el.mozRequestFullScreen) {
+          await el.mozRequestFullScreen();
+        } else if (el.msRequestFullscreen) {
+          await el.msRequestFullscreen();
+        }
+      } else {
+        if (doc.exitFullscreen) {
+          await doc.exitFullscreen();
+        } else if (doc.webkitExitFullscreen) {
+          await doc.webkitExitFullscreen();
+        } else if (doc.mozCancelFullScreen) {
+          await doc.mozCancelFullScreen();
+        } else if (doc.msExitFullscreen) {
+          await doc.msExitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.warn('Fullscreen toggle failed:', err);
+    }
+  };
 
   const sourceType = settings?.sourceType || state.sourceType || 'vinyl';
 
@@ -217,6 +273,7 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
 
           {/* Controls button */}
           <button
+            id="open-controls-btn"
             onClick={(e) => {
               e.stopPropagation();
               onOpenControls();
@@ -225,6 +282,26 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
           >
             <Sliders className="w-3.5 h-3.5 text-amber-400" />
             <span>Controls</span>
+          </button>
+
+          {/* Go Full Screen / Exit Full Screen button */}
+          <button
+            id="fullscreen-toggle-btn"
+            onClick={toggleFullscreen}
+            title={isFullscreen ? 'Exit Full Screen' : 'Go Full Screen'}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-neutral-800/90 hover:bg-neutral-700 text-neutral-100 rounded-xl border border-neutral-700/80 transition-colors text-xs font-sans font-medium shadow-lg active:scale-95"
+          >
+            {isFullscreen ? (
+              <>
+                <Minimize2 className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Exit Full Screen</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Go Full Screen</span>
+              </>
+            )}
           </button>
         </div>
       </header>

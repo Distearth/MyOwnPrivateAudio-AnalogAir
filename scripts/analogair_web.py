@@ -716,6 +716,72 @@ async def toggle_favorite_output(request):
 
     return web.json_response({"success": True, "isFavorite": is_fav, "favoriteSpeakers": all_favs})
 
+async def ensure_owntone_playing():
+    """
+    Ensures OwnTone is actively playing the stream from the pipe.
+    If the player is paused or stopped (e.g. after destinations went offline),
+    resumes or starts playback immediately.
+    """
+    async with aiohttp.ClientSession() as session:
+        try:
+            # 1. Query current player state
+            player_state = None
+            async with session.get(f"{OWNTONE_BASE}/api/player", timeout=2) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    player_state = data.get("state")
+
+            if player_state == "play":
+                return True
+
+            # 2. Try starting playback via PUT /api/player/play and POST /api/player/play
+            for method in (session.put, session.post):
+                try:
+                    async with method(f"{OWNTONE_BASE}/api/player/play", timeout=2) as r_play:
+                        if r_play.status == 200:
+                            break
+                except Exception:
+                    pass
+
+            await asyncio.sleep(0.3)
+            async with session.get(f"{OWNTONE_BASE}/api/player", timeout=2) as r2:
+                if r2.status == 200:
+                    if (await r2.json()).get("state") == "play":
+                        return True
+
+            # 3. If still not playing, try adding the AnalogAir pipe track to the queue and starting playback
+            for expr in (
+                'path contains "AnalogAir"',
+                'title contains "AnalogAir"',
+                'media_kind is pipe'
+            ):
+                try:
+                    async with session.post(
+                        f"{OWNTONE_BASE}/api/queue/items/add",
+                        params={"expression": expr, "clear": "true", "playback": "start"},
+                        timeout=2
+                    ) as rq:
+                        if rq.status in (200, 204):
+                            break
+                except Exception:
+                    pass
+
+            # Final verify/resume
+            try:
+                async with session.put(f"{OWNTONE_BASE}/api/player/play", timeout=2) as r_final:
+                    pass
+            except Exception:
+                pass
+
+            return True
+        except Exception as e:
+            print(f"[AnalogAir Web] ensure_owntone_playing: {e}", flush=True)
+            return False
+
+async def start_owntone_player(request):
+    await ensure_owntone_playing()
+    return web.json_response({"success": True})
+
 async def toggle_owntone_output(request):
     output_id = request.match_info["id"]
     async with aiohttp.ClientSession() as session:
@@ -732,7 +798,10 @@ async def toggle_owntone_output(request):
                         async with session.put(f"{OWNTONE_BASE}/api/outputs/{output_id}", json=payload, timeout=2) as r2:
                             if r2.status == 200:
                                 res_data = await r2.json()
-                                return web.json_response({"output": res_data})
+                                if new_state:
+                                    # Speaker selected: make sure OwnTone starts playing the stream if paused or stopped
+                                    asyncio.create_task(ensure_owntone_playing())
+                                return web.json_response({"output": res_data, "playbackEnsured": new_state})
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
     return web.json_response({"error": "Failed to toggle output"}, status=500)
@@ -1284,9 +1353,13 @@ async def auto_connect_startup_speakers(app):
                                     await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
                                     print(f"[AnalogAir Web] Auto-connected startup speaker: {o.get('name')}", flush=True)
                         if fav_ids.issubset(found_favs) and all_favs_active:
+                            await ensure_owntone_playing()
                             break
             except Exception as e:
                 print(f"[AnalogAir Web] Speaker auto-connect check: {e}", flush=True)
+
+        if fav_ids:
+            await ensure_owntone_playing()
 
 async def start_background_tasks(app):
     asyncio.create_task(auto_connect_startup_speakers(app))
@@ -1310,6 +1383,7 @@ def main():
     app.router.add_post('/api/owntone/outputs/{id}/toggle', toggle_owntone_output)
     app.router.add_post('/api/owntone/outputs/{id}/volume', set_owntone_output_volume)
     app.router.add_post('/api/owntone/outputs/{id}/favorite', toggle_favorite_output)
+    app.router.add_post('/api/owntone/player/play', start_owntone_player)
 
     # 4. Search & Overrides
     app.router.add_get('/api/search/musicbrainz', search_musicbrainz)

@@ -222,9 +222,11 @@ export default function App() {
 
   // Toggle OwnTone speaker (Enforces 100% volume by default)
   const handleToggleOutput = async (id: string) => {
+    let targetWillSelect = false;
     setOutputs(prev => prev.map(o => {
       if (o.id === id) {
         const willSelect = !o.selected;
+        if (willSelect) targetWillSelect = true;
         return {
           ...o,
           selected: willSelect,
@@ -234,9 +236,14 @@ export default function App() {
       return o;
     }));
 
-    const data = await safeJsonFetch<{ output?: OwnToneOutput }>(`/api/owntone/outputs/${id}/toggle`, { method: 'POST' });
+    const data = await safeJsonFetch<{ output?: OwnToneOutput; playbackEnsured?: boolean }>(`/api/owntone/outputs/${id}/toggle`, { method: 'POST' });
     if (data?.output) {
       setOutputs(prev => prev.map(o => o.id === id ? { ...o, ...data.output } : o));
+    }
+
+    // When selecting/activating a speaker destination, ensure OwnTone is actively streaming from the pipe
+    if (targetWillSelect || data?.output?.selected) {
+      await safeJsonFetch('/api/owntone/player/play', { method: 'POST' });
     }
   };
 

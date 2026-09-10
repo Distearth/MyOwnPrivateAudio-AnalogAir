@@ -662,7 +662,12 @@ app.post('/api/owntone/outputs/:id/toggle', (req, res) => {
     out.volume = 100;
   }
 
-  res.json({ success: true, output: out });
+  res.json({ success: true, output: out, playbackEnsured: out.selected });
+});
+
+// Start/ensure OwnTone stream playback from pipe
+app.post('/api/owntone/player/play', (req, res) => {
+  res.json({ success: true, state: 'play' });
 });
 
 app.post('/api/owntone/outputs/:id/volume', (req, res) => {

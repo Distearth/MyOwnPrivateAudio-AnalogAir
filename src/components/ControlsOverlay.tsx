@@ -632,7 +632,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                 <div>
                   <h3 className="text-base font-bold text-neutral-100">AirPlay & Speaker Outputs</h3>
                   <p className="text-xs text-neutral-400">
-                    Toggling any destination automatically engages it at 100% volume.
+                    Selecting any destination sets volume to 100% and automatically resumes stream playback from the vinyl pipe.
                   </p>
                 </div>
                 <a
