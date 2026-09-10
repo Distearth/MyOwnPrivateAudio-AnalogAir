@@ -175,39 +175,78 @@ def make_xml(title, artist, album):
 <item><type>61727473</type><code>6173616c</code><data encoding="base64">{encode_b64(album)}</data></item>
 """
 
-def update_artwork(artist, album, mbid=None, custom_art_url=None, fallback_art_url=None):
-    art_url = custom_art_url or fallback_art_url
-    clean_album = sanitize_album_title(album)
-    if not art_url:
+def update_artwork(artist, album, title=None, mbid=None, custom_art_url=None, fallback_art_url=None):
+    """
+    Fetches and saves high-resolution artwork to LIVE_ART_PATH.
+    Uses multi-stage fallback (Custom override -> Shazam art -> iTunes Album -> iTunes Song -> MusicBrainz).
+    Never throws away fallbacks if one candidate fails to download.
+    """
+    candidates = []
+    if custom_art_url and str(custom_art_url).strip():
+        candidates.append(("override", custom_art_url.strip()))
+
+    if fallback_art_url and str(fallback_art_url).strip():
+        candidates.append(("shazam", fallback_art_url.strip()))
+
+    clean_album = sanitize_album_title(album) if album else ""
+    idle_album = get_setting("idle_album", "AT-LP60X Turntable")
+    has_valid_album = clean_album and clean_album.lower() not in (idle_album.lower(), "analogair vinyl", "unknown album")
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+
+    # 1. Search iTunes by Album if album name is known and valid
+    if has_valid_album and artist:
         try:
-            query = f"{artist} {clean_album}".strip()
-            url = f"https://itunes.apple.com/search?term={requests.utils.quote(query)}&entity=album&limit=1"
-            res = requests.get(url, timeout=4).json()
-            if res.get("results"):
-                art_url = res["results"][0].get("artworkUrl100", "").replace("100x100bb", "1400x1400bb")
-        except Exception:
-            pass
-    if not art_url and mbid:
+            q = requests.utils.quote(f"{artist} {clean_album}".strip())
+            url = f"https://itunes.apple.com/search?term={q}&entity=album&limit=3"
+            res = requests.get(url, headers=headers, timeout=6).json()
+            for r in res.get("results", []):
+                art = r.get("artworkUrl100", "")
+                if art:
+                    candidates.append(("itunes_album", art.replace("100x100bb", "1400x1400bb")))
+                    break
+        except Exception as e:
+            print(f"[AnalogAir] iTunes album query error: {e}", flush=True)
+
+    # 2. Search iTunes by Song (Artist + Track Title)
+    if artist and title:
         try:
-            caa_url = f"https://coverartarchive.org/release/{mbid}/front-500"
-            res = requests.get(caa_url, timeout=4)
-            if res.status_code == 200:
-                art_url = caa_url
-        except Exception:
-            pass
-    if art_url:
+            clean_track = sanitize_track_title(title)
+            q = requests.utils.quote(f"{artist} {clean_track}".strip())
+            url = f"https://itunes.apple.com/search?term={q}&entity=song&limit=3"
+            res = requests.get(url, headers=headers, timeout=6).json()
+            for r in res.get("results", []):
+                art = r.get("artworkUrl100", "")
+                if art:
+                    candidates.append(("itunes_song", art.replace("100x100bb", "1400x1400bb")))
+                    break
+        except Exception as e:
+            print(f"[AnalogAir] iTunes song query error: {e}", flush=True)
+
+    # 3. Search MusicBrainz CoverArtArchive if mbid is provided
+    if mbid:
+        candidates.append(("coverartarchive", f"https://coverartarchive.org/release/{mbid}/front-500"))
+
+    # Try downloading candidates in priority order until one succeeds
+    for source_name, url in candidates:
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            img_bytes = requests.get(art_url, headers=headers, timeout=6).content
-            if len(img_bytes) > 500:
-                image = Image.open(io.BytesIO(img_bytes))
+            if not url or not url.startswith("http"):
+                continue
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code == 200 and len(resp.content) > 500:
+                image = Image.open(io.BytesIO(resp.content))
                 if image.mode in ("RGBA", "P", "LA"):
                     image = image.convert("RGB")
+                os.makedirs(os.path.dirname(LIVE_ART_PATH), exist_ok=True)
                 image.save(LIVE_ART_PATH, "JPEG", quality=92)
-                return art_url
-        except Exception as e:
-            print(f"[AnalogAir] Error saving live artwork from {art_url}: {e}", flush=True)
-    restore_default_artwork()
+                print(f"[AnalogAir] Successfully updated live artwork from {source_name} ({len(resp.content)} bytes)", flush=True)
+                return url
+        except Exception as err:
+            print(f"[AnalogAir] Candidate artwork failed ({source_name}: {url[:60]}...): {err}", flush=True)
+
+    # If all new candidate sources failed: only restore default if live art doesn't exist
+    if not os.path.exists(LIVE_ART_PATH) or os.path.getsize(LIVE_ART_PATH) < 500:
+        restore_default_artwork()
     return None
 
 def get_capture_target():
@@ -603,7 +642,13 @@ async def main():
                         print(f"[AnalogAir] Shazam match found: '{raw_title}' by '{raw_artist}' (ID: {track_id})", flush=True)
                         if track_id != current_track_id:
                             images = track.get("images", {})
-                            shazam_art = images.get("coverarthq") or images.get("coverart")
+                            shazam_art = (
+                                images.get("coverarthq") or
+                                images.get("coverart") or
+                                track.get("share", {}).get("image") or
+                                track.get("hub", {}).get("image") or
+                                images.get("background")
+                            )
 
                             raw_album = None
                             for s in track.get("sections", []):
@@ -614,7 +659,7 @@ async def main():
                                 if raw_album:
                                     break
                             if not raw_album:
-                                raw_album = idle_album
+                                raw_album = track.get("album") or idle_album
                             base_album = sanitize_album_title(raw_album)
 
                             track_key = f"{raw_artist} - {raw_title}"
@@ -638,14 +683,14 @@ async def main():
                             last_album = album
                             last_title = display_title
 
-                            resolved_art = update_artwork(artist, album, mbid, custom_art_url, fallback_art_url=shazam_art)
+                            resolved_art = update_artwork(artist, album, title=raw_title, mbid=mbid, custom_art_url=custom_art_url, fallback_art_url=shazam_art)
                             active_art_url = resolved_art if (resolved_art and resolved_art.startswith("http")) else f"/api/artwork/current.jpg?t={int(time.time())}"
                             write_to_pipe(make_xml(display_title, artist, album))
                             
                             current_track_id = track_id
-                            if not continuous_mode:
+                            if not continuous_mode and resolved_art:
                                 session_locked = True
-                                print(f"[AnalogAir] Album side locked: '{album}'. Artwork will remain active until needle lift.", flush=True)
+                                print(f"[AnalogAir] Album side locked with matched artwork: '{album}'. Artwork will remain active until needle lift.", flush=True)
 
                             try:
                                 with open(STATE_FILE, "w") as sf:

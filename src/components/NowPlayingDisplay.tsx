@@ -150,15 +150,18 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
 
   // Multi-tier artwork resolution with seamless failover
   // Level 0: Primary source (state.artUrl when playing, or configured default / custom-standby)
-  // Level 1: Standby local Pi image (/api/artwork/custom-standby.jpg)
-  // Level 2: Live audio pipe mirror (/api/artwork/current.jpg)
-  // Level 3: Static bundled image asset (vinylDefaultArt, tapeDefaultArt, cdDefaultArt)
-  // Level 4: Pure CSS/SVG vector sleeve (never breaks, zero network dependency)
+  // Level 1: Live audio pipe mirror (/api/artwork/current.jpg) or bundled asset
+  // Level 2: Static bundled image asset (vinylDefaultArt, tapeDefaultArt, cdDefaultArt)
+  // Level 3: Pure CSS/SVG vector sleeve (never breaks, zero network dependency)
   const displayArt = useMemo(() => {
-    if (fallbackLevel >= 4) return '';
-    if (fallbackLevel === 3) return bundledSourceArt;
-    if (fallbackLevel === 2) return `/api/artwork/current.jpg?v=${Date.now()}`;
-    if (fallbackLevel === 1) return `/api/artwork/custom-standby.jpg?v=${Date.now()}`;
+    if (fallbackLevel >= 3) return '';
+    if (fallbackLevel === 2) return bundledSourceArt;
+    if (fallbackLevel === 1) {
+      if (!isIdle && state.artUrl && !state.artUrl.includes('/api/artwork/current.jpg')) {
+        return '/api/artwork/current.jpg';
+      }
+      return bundledSourceArt;
+    }
 
     if (isIdle) {
       if (settings?.defaultArtUrl && settings.defaultArtUrl.trim() && !settings.defaultArtUrl.includes('default_vinyl.jpg')) {
@@ -167,10 +170,9 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
       return '/api/artwork/custom-standby.jpg';
     }
 
-    if (useLocalFallback) return `/api/artwork/current.jpg?v=${Date.now()}`;
     if (state.artUrl && state.artUrl.trim()) return state.artUrl;
-    return '/api/artwork/custom-standby.jpg';
-  }, [fallbackLevel, bundledSourceArt, isIdle, settings?.defaultArtUrl, useLocalFallback, state.artUrl]);
+    return '/api/artwork/current.jpg';
+  }, [fallbackLevel, bundledSourceArt, isIdle, settings?.defaultArtUrl, state.artUrl]);
 
   const handleImageError = () => {
     setFallbackLevel(prev => prev + 1);
