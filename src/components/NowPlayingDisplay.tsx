@@ -86,6 +86,22 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
   const displayAlbum = useMemo(() => sanitizeAlbumTitle(state.album), [state.album]);
   const displayTitle = useMemo(() => sanitizeTrackTitle(state.title), [state.title]);
 
+  // Hide mouse cursor across the entire screen when in full screen and idle elements fade out
+  useEffect(() => {
+    if (isFullscreen && isFaded) {
+      document.body.style.cursor = 'none';
+      document.documentElement.style.cursor = 'none';
+    } else {
+      document.body.style.cursor = '';
+      document.documentElement.style.cursor = '';
+    }
+
+    return () => {
+      document.body.style.cursor = '';
+      document.documentElement.style.cursor = '';
+    };
+  }, [isFullscreen, isFaded]);
+
   // Reset image error and fallback states when artUrl, album, artist, or status changes
   useEffect(() => {
     setImageError(false);
@@ -216,7 +232,9 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
   return (
     <div
       onClick={handleScreenClick}
-      className="relative w-full h-screen bg-gradient-to-b from-neutral-950 via-neutral-900 to-neutral-950 flex flex-col items-center justify-between p-6 sm:p-10 select-none cursor-pointer overflow-hidden transition-colors"
+      className={`relative w-full h-screen bg-gradient-to-b from-neutral-950 via-neutral-900 to-neutral-950 flex flex-col items-center justify-between p-6 sm:p-10 select-none overflow-hidden transition-colors ${
+        isFullscreen && isFaded ? 'cursor-none [&_*]:cursor-none' : 'cursor-pointer'
+      }`}
     >
       {/* Background ambient color bleed */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-25">
