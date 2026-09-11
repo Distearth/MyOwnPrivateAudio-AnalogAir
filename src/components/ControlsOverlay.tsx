@@ -1626,6 +1626,21 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                 </div>
 
                 <div className="space-y-1">
+                  <label className="text-xs text-neutral-400">Shazam Audio Sample Duration</label>
+                  <select
+                    value={settings.sampleDuration || 10}
+                    onChange={(e) => onUpdateSettings({ sampleDuration: parseInt(e.target.value, 10) })}
+                    className="w-full p-2.5 bg-neutral-950 border border-neutral-800 rounded-xl text-white text-sm focus:outline-none focus:border-amber-500"
+                  >
+                    <option value={6}>6 Seconds</option>
+                    <option value={8}>8 Seconds</option>
+                    <option value={10}>10 Seconds (Standard)</option>
+                    <option value={12}>12 Seconds</option>
+                    <option value={15}>15 Seconds</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
                   <label className="text-xs text-neutral-400">Touchscreen Dimmer Timeout</label>
                   <select
                     value={settings.dimMinutes}
