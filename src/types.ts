@@ -72,6 +72,10 @@ export interface MusicBrainzCandidate {
   isCompilation: boolean;
   typeLabel: string;
   artUrl?: string;
+  score?: number;
+  sideOpener?: string;
+  trackCount?: number;
+  releaseGroupMbid?: string;
 }
 
 export interface PlaySession {
@@ -103,6 +107,7 @@ export interface SystemPreferences {
   idleAlbum: string;
   idleTitle: string;
   enableRecognition: boolean;
+  sampleDuration?: number;
   continuousId: boolean;
   silenceGapSeconds: number;
   dimMinutes: number;

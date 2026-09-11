@@ -822,13 +822,20 @@ async def set_owntone_output_volume(request):
 
 # --- 4. MusicBrainz & iTunes Search Proxies ---
 async def search_itunes(request):
-    q = (request.query.get("query") or "").strip()
-    if not q:
+    query = (request.query.get("query") or "").strip()
+    artist = (request.query.get("artist") or "").strip()
+    album = (request.query.get("album") or "").strip()
+    track = (request.query.get("track") or "").strip()
+
+    search_term = f"{artist} {album}".strip() if (artist and album) else (album or artist or track or query)
+    if not search_term:
         return web.json_response({"results": []})
+
     async with aiohttp.ClientSession() as session:
         try:
-            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q)}&entity=album&limit=10"
-            async with session.get(url, timeout=5) as resp:
+            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(search_term)}&entity=album&limit=8"
+            headers = {"User-Agent": "Mozilla/5.0"}
+            async with session.get(url, headers=headers, timeout=5) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     results = []
@@ -850,91 +857,166 @@ async def search_itunes(request):
 async def search_musicbrainz(request):
     query = (request.query.get("query") or "").strip()
     artist = (request.query.get("artist") or "").strip()
-    recording = (request.query.get("recording") or "").strip()
+    album = (request.query.get("album") or "").strip()
+    recording = (request.query.get("recording") or request.query.get("track") or "").strip()
 
-    if not query and not (artist or recording):
+    if not query and not artist and not album and not recording:
         return web.json_response({"candidates": []})
 
     async def fetch_itunes_fallback():
+        candidates = []
         try:
-            search_term = query if query else f"{artist} {recording}".strip()
+            alb_term = f"{artist} {album}".strip() if (artist and album) else (album or artist or query)
+            headers = {"User-Agent": "Mozilla/5.0"}
             async with aiohttp.ClientSession() as session:
-                url = f"https://itunes.apple.com/search?term={urllib.parse.quote(search_term)}&entity=album&limit=10"
-                async with session.get(url, timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        candidates = []
-                        for item in data.get("results", []):
-                            art100 = item.get("artworkUrl100", "")
-                            candidates.append({
-                                "id": f"itunes-{item.get('collectionId')}",
-                                "title": sanitize_album_title(item.get("collectionName", "")),
-                                "artist": item.get("artistName", ""),
-                                "year": item.get("releaseDate", "")[:4] if item.get("releaseDate") else "Release",
-                                "format": '12" Vinyl',
-                                "isFullAlbum": True,
-                                "isCompilation": False,
-                                "typeLabel": "Studio Album (Canonical)",
-                                "artUrl": art100.replace("100x100bb", "1400x1400bb") if art100 else ""
-                            })
-                        return candidates
+                # 1. Search Albums
+                if alb_term:
+                    url = f"https://itunes.apple.com/search?term={urllib.parse.quote(alb_term)}&entity=album&limit=10"
+                    async with session.get(url, headers=headers, timeout=5) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            for item in data.get("results", []):
+                                coll_name = sanitize_album_title(item.get("collectionName", ""))
+                                is_live = bool(re.search(r"live|bootleg", coll_name, re.IGNORECASE))
+                                is_comp = bool(re.search(r"greatest hits|best of|anthology|collection", coll_name, re.IGNORECASE))
+                                art100 = item.get("artworkUrl100", "")
+                                candidates.append({
+                                    "id": f"itunes-{item.get('collectionId')}",
+                                    "title": coll_name,
+                                    "artist": item.get("artistName", ""),
+                                    "year": item.get("releaseDate", "")[:4] if item.get("releaseDate") else "Release",
+                                    "format": '12" Vinyl LP',
+                                    "isFullAlbum": not is_live and not is_comp,
+                                    "isCompilation": is_comp,
+                                    "typeLabel": "Live Recording" if is_live else ("Compilation" if is_comp else "Studio Album (Canonical)"),
+                                    "trackCount": item.get("trackCount", 0),
+                                    "artUrl": art100.replace("100x100bb", "1400x1400bb") if art100 else ""
+                                })
+
+                # 2. Search Song to match Side Opener (Track 1)
+                if recording:
+                    song_term = f"{artist} {recording}".strip() if artist else recording
+                    url_song = f"https://itunes.apple.com/search?term={urllib.parse.quote(song_term)}&entity=song&limit=10"
+                    async with session.get(url_song, headers=headers, timeout=5) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            for item in data.get("results", []):
+                                t_num = item.get("trackNumber", 99)
+                                is_track_one = (t_num == 1)
+                                coll_name = sanitize_album_title(item.get("collectionName", ""))
+                                is_live = bool(re.search(r"live", coll_name, re.IGNORECASE) or re.search(r"live", item.get("trackName", ""), re.IGNORECASE))
+                                is_comp = bool(re.search(r"greatest hits|best of|anthology", coll_name, re.IGNORECASE))
+                                art100 = item.get("artworkUrl100", "")
+
+                                existing = next((c for c in candidates if c["title"].lower() == coll_name.lower()), None)
+                                if existing:
+                                    if is_track_one:
+                                        existing["sideOpener"] = "Track 1 (Side A Opener)"
+                                    if item.get("trackCount"):
+                                        existing["trackCount"] = item.get("trackCount")
+                                else:
+                                    candidates.insert(0, {
+                                        "id": f"itunes-song-{item.get('collectionId')}",
+                                        "title": coll_name,
+                                        "artist": item.get("artistName", ""),
+                                        "year": item.get("releaseDate", "")[:4] if item.get("releaseDate") else "Release",
+                                        "format": '12" Vinyl LP',
+                                        "isFullAlbum": not is_live and not is_comp,
+                                        "isCompilation": is_comp,
+                                        "sideOpener": "Track 1 (Side A Opener)" if is_track_one else f"Track {t_num}",
+                                        "typeLabel": "Live Recording" if is_live else ("Compilation" if is_comp else "Studio Album (Canonical)"),
+                                        "trackCount": item.get("trackCount", 0),
+                                        "artUrl": art100.replace("100x100bb", "1400x1400bb") if art100 else ""
+                                    })
+            # Prioritize studio albums & side openers
+            candidates.sort(key=lambda c: (
+                50 if "Track 1" in c.get("sideOpener", "") else 0
+            ) + (30 if c.get("isFullAlbum") else 0) - (20 if c.get("isCompilation") else 0), reverse=True)
+            return candidates[:15]
         except Exception:
             pass
-        return []
+        return candidates
 
     try:
-        mb_query = urllib.parse.quote(query) if query else urllib.parse.quote(f'artist:"{artist}" AND recording:"{recording}"')
-        url = f"https://musicbrainz.org/ws/2/recording?query={mb_query}&inc=release-groups+releases&fmt=json"
-        headers = {
-            "User-Agent": "AnalogAir/1.0 (https://github.com/analogair/analogair-streamer; contact: stream@analogair.local)"
+        mb_headers = {
+            "User-Agent": "AnalogAir/1.2.0 ( contact@analogair.local; Distearth@gmail.com )"
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=6) as resp:
-                if resp.status != 200:
-                    fb = await fetch_itunes_fallback()
-                    return web.json_response({"candidates": fb})
 
-                data = await resp.json()
-                candidate_map = {}
-                for rec in data.get("recordings", []):
-                    rec_artist = (rec.get("artist-credit") or [{}])[0].get("name") or artist or "Unknown Artist"
-                    for rel in rec.get("releases", []):
-                        if rel.get("status") and rel.get("status") != "Official":
-                            continue
-                        rg = rel.get("release-group") or {}
-                        rg_id = rg.get("id") or rel.get("id")
-                        title = rg.get("title") or rel.get("title")
-                        rel_date = rg.get("first-release-date") or rel.get("date") or "N/A"
-                        year = rel_date[:4] if rel_date else "N/A"
-                        primary_type = rg.get("primary-type") or "Album"
-                        secondary_types = rg.get("secondary-types") or []
-                        if "Live" in secondary_types or "Bootleg" in secondary_types:
-                            continue
-                        if rg_id in candidate_map:
-                            continue
-                        is_full_album = (primary_type == "Album" and len(secondary_types) == 0)
-                        is_compilation = (primary_type == "Compilation" or "Compilation" in secondary_types)
-                        type_label = "Studio Album (Canonical)" if is_full_album else ("Compilation" if is_compilation else primary_type)
-                        media_list = rel.get("media") or [{}]
-                        fmt = media_list[0].get("format") if media_list else '12" Vinyl'
-                        candidate_map[rg_id] = {
-                            "id": rel.get("id"),
-                            "title": title,
-                            "artist": rec_artist,
-                            "year": year,
-                            "format": fmt or '12" Vinyl',
-                            "isFullAlbum": is_full_album,
-                            "isCompilation": is_compilation,
-                            "typeLabel": type_label,
-                            "artUrl": f"https://coverartarchive.org/release/{rel.get('id')}/front-500"
-                        }
+        artist_mbid = None
+        canonical_artist = artist
 
-                candidates = list(candidate_map.values())
-                candidates.sort(key=lambda c: (not c["isFullAlbum"], c["year"] or "9999"))
-                candidates = candidates[:15]
-                if not candidates:
-                    candidates = await fetch_itunes_fallback()
-                return web.json_response({"candidates": candidates})
+        # STEP 1: Artist Recovery Search (handles Kanji/Hanja/aliases)
+        if artist:
+            try:
+                artist_q = urllib.parse.quote(f'alias:"{artist}" OR artist:"{artist}"')
+                url_artist = f"https://musicbrainz.org/ws/2/artist?query={artist_q}&fmt=json&limit=3"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url_artist, headers=mb_headers, timeout=5) as resp:
+                        if resp.status == 200:
+                            a_data = await resp.json()
+                            artists_list = a_data.get("artists", [])
+                            if artists_list:
+                                artist_mbid = artists_list[0].get("id")
+                                canonical_artist = artists_list[0].get("name") or artist
+            except Exception:
+                pass
+
+        # STEP 2: Release Group (Master Release) Search
+        rg_url = None
+        if artist_mbid and album:
+            rg_q = f'arid:{artist_mbid} AND releasegroupaccent:"{album}" AND primarytype:album'
+            rg_url = f"https://musicbrainz.org/ws/2/release-group?query={urllib.parse.quote(rg_q)}&fmt=json&limit=10"
+        elif album:
+            art_clause = f'artist:"{artist}" AND ' if artist else ""
+            rg_q = f'{art_clause}releasegroupaccent:"{album}"'
+            rg_url = f"https://musicbrainz.org/ws/2/release-group?query={urllib.parse.quote(rg_q)}&fmt=json&limit=10"
+        elif query:
+            rg_q = f'releasegroupaccent:"{query}"'
+            rg_url = f"https://musicbrainz.org/ws/2/release-group?query={urllib.parse.quote(rg_q)}&fmt=json&limit=10"
+
+        candidate_map = {}
+
+        if rg_url:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(rg_url, headers=mb_headers, timeout=6) as resp:
+                        if resp.status == 200:
+                            rg_data = await resp.json()
+                            for rg in rg_data.get("release-groups", []):
+                                rgid = rg.get("id")
+                                rg_title = sanitize_album_title(rg.get("title", ""))
+                                p_type = rg.get("primary-type") or "Album"
+                                s_types = rg.get("secondary-types") or []
+                                is_full_album = (p_type == "Album" and len(s_types) == 0)
+                                is_comp = (p_type == "Compilation" or "Compilation" in s_types)
+                                rel_date = rg.get("first-release-date") or ""
+                                year = rel_date[:4] if rel_date else "N/A"
+
+                                candidate_map[rgid] = {
+                                    "id": rgid,
+                                    "releaseGroupMbid": rgid,
+                                    "title": rg_title,
+                                    "artist": (rg.get("artist-credit") or [{}])[0].get("name") or canonical_artist or artist,
+                                    "year": year,
+                                    "format": '12" Vinyl LP',
+                                    "isFullAlbum": is_full_album,
+                                    "isCompilation": is_comp,
+                                    "typeLabel": "Studio Album (Canonical)" if is_full_album else ("Compilation" if is_comp else p_type),
+                                    "score": rg.get("score", 80),
+                                    "artUrl": f"https://coverartarchive.org/release-group/{rgid}/front-500"
+                                }
+            except Exception:
+                pass
+
+        # Fetch iTunes fallback/complement
+        itunes_candidates = await fetch_itunes_fallback()
+        mb_list = list(candidate_map.values())
+        final_candidates = (mb_list + itunes_candidates)[:18]
+
+        if not final_candidates:
+            final_candidates = itunes_candidates
+
+        return web.json_response({"candidates": final_candidates})
     except Exception:
         fb = await fetch_itunes_fallback()
         return web.json_response({"candidates": fb})

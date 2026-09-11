@@ -249,6 +249,105 @@ def update_artwork(artist, album, title=None, mbid=None, custom_art_url=None, fa
         restore_default_artwork()
     return None
 
+def is_turntable_string(s):
+    if not s:
+        return True
+    lower = s.lower().strip()
+    return any(k in lower for k in ["turntable", "analogair", "idle", "unknown", "standby", "default"])
+
+def resolve_canonical_vinyl_album(artist, title, candidate_album=None):
+    """
+    Identifies the definitive canonical studio album and vinyl side opener for a track.
+    Distinguishes studio records from live bootlegs, greatest hits compilations, or idle strings.
+    Gives a massive score boost to Track 1 (Side A / Side B openers).
+    """
+    if not artist or not title:
+        return candidate_album, None, None
+
+    clean_title = sanitize_track_title(title).split(" (")[0].split(" [")[0].strip()
+    headers = {"User-Agent": "Mozilla/5.0"}
+    best_album = candidate_album if (candidate_album and not is_turntable_string(candidate_album)) else None
+    best_art = None
+    best_mbid = None
+    highest_score = -999
+
+    # 1. Query iTunes Song Database to inspect tracklists & side openers
+    try:
+        q = requests.utils.quote(f"{artist} {clean_title}".strip())
+        url = f"https://itunes.apple.com/search?term={q}&entity=song&limit=15"
+        res = requests.get(url, headers=headers, timeout=5).json()
+        for item in res.get("results", []):
+            coll = sanitize_album_title(item.get("collectionName", ""))
+            if not coll:
+                continue
+            t_num = item.get("trackNumber", 99)
+            art = (item.get("artworkUrl100") or "").replace("100x100bb", "1400x1400bb")
+            is_live = bool(re.search(r"live|bootleg|concert", coll, re.IGNORECASE) or re.search(r"live", item.get("trackName", ""), re.IGNORECASE))
+            is_comp = bool(re.search(r"greatest hits|best of|anthology|singles", coll, re.IGNORECASE))
+
+            score = 0
+            # Side opener bonus (Track 1 is Side A opener)
+            if t_num == 1:
+                score += 50
+            elif t_num in (2, 3, 4, 5, 6):
+                score += 20
+
+            # Studio album priority
+            if not is_live and not is_comp:
+                score += 35
+            if is_live:
+                score -= 45
+            if is_comp:
+                score -= 25
+
+            # If candidate_album was provided and matches (and isn't idle/turntable)
+            if candidate_album and not is_turntable_string(candidate_album):
+                if coll.lower() in candidate_album.lower() or candidate_album.lower() in coll.lower():
+                    score += 15
+
+            if score > highest_score:
+                highest_score = score
+                best_album = coll
+                best_art = art
+    except Exception as e:
+        print(f"[AnalogAir] iTunes vinyl album resolution error: {e}", flush=True)
+
+    # 2. Query MusicBrainz Master Release Group if available
+    try:
+        mb_headers = {"User-Agent": "AnalogAir/1.2.0 ( contact@analogair.local; Distearth@gmail.com )"}
+        # Find artist MBID using alias recovery
+        art_q = requests.utils.quote(f'alias:"{artist}" OR artist:"{artist}"')
+        a_url = f"https://musicbrainz.org/ws/2/artist?query={art_q}&fmt=json&limit=1"
+        a_resp = requests.get(a_url, headers=mb_headers, timeout=4)
+        if a_resp.status_code == 200:
+            a_data = a_resp.json()
+            artists = a_data.get("artists", [])
+            if artists:
+                arid = artists[0].get("id")
+                target_search = best_album or candidate_album
+                if target_search and not is_turntable_string(target_search):
+                    rg_q = requests.utils.quote(f'arid:{arid} AND releasegroupaccent:"{target_search}" AND primarytype:album')
+                    rg_url = f"https://musicbrainz.org/ws/2/release-group?query={rg_q}&fmt=json&limit=3"
+                    rg_resp = requests.get(rg_url, headers=mb_headers, timeout=4)
+                    if rg_resp.status_code == 200:
+                        rg_data = rg_resp.json()
+                        for rg in rg_data.get("release-groups", []):
+                            rg_id = rg.get("id")
+                            rg_title = sanitize_album_title(rg.get("title", ""))
+                            p_type = rg.get("primary-type") or "Album"
+                            s_types = rg.get("secondary-types") or []
+                            if p_type == "Album" and not s_types:
+                                best_album = rg_title
+                                best_mbid = rg_id
+                                caa_url = f"https://coverartarchive.org/release-group/{rg_id}/front-500"
+                                if not best_art:
+                                    best_art = caa_url
+                                break
+    except Exception:
+        pass
+
+    return best_album, best_art, best_mbid
+
 def get_capture_target():
     """
     Finds the exact audio device target to record from.
@@ -322,9 +421,9 @@ def find_usb_alsa_device():
         pass
     return "default"
 
-def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=6):
+def capture_sample(out_wav="/tmp/shazam_sample.wav", duration=10):
     """
-    Captures a 6-second audio sample without interfering with the live OwnTone pipe.
+    Captures a high-fidelity audio sample (default 10s) without interfering with the live OwnTone pipe.
     PipeWire allows multiple concurrent streams from the same audio source.
     """
     try:
@@ -523,7 +622,8 @@ async def main():
         silence_thresh = float(get_setting("silence_threshold", str(DEFAULT_SILENCE_THRESHOLD)))
         max_silence_counts = max(1, silence_timeout_sec // CHECK_INTERVAL)
 
-        sample_file = capture_sample(duration=6)
+        sample_duration = int(get_setting("sample_duration", "10"))
+        sample_file = capture_sample(duration=sample_duration)
         rms = compute_wav_rms(sample_file)
         has_signal = (rms >= silence_thresh)
 
@@ -674,8 +774,11 @@ async def main():
                                 print(f"[AnalogAir] Applying saved local override: '{artist}' - '{album}'", flush=True)
                             else:
                                 artist = raw_artist
-                                album = base_album
-                                mbid = None
+                                canon_album, canon_art, canon_mbid = resolve_canonical_vinyl_album(artist, raw_title, candidate_album=base_album)
+                                album = sanitize_album_title(canon_album or base_album)
+                                custom_art_url = canon_art
+                                mbid = canon_mbid
+                                print(f"[AnalogAir] Resolved canonical vinyl album: '{artist}' - '{album}' (MBID: {mbid})", flush=True)
 
                             clean_title = sanitize_track_title(raw_title)
                             display_title = clean_title if continuous_mode else "AnalogAir"

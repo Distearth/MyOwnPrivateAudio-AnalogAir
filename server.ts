@@ -423,138 +423,206 @@ app.get('/api/audio-level', (req, res) => {
   });
 });
 
-// 4. MusicBrainz release search proxy with robust iTunes fallback
+// 4. MusicBrainz release group & canonical master search proxy with iTunes fallback
 app.get('/api/search/musicbrainz', async (req, res) => {
   const query = (req.query.query as string || '').trim();
   const artist = (req.query.artist as string || '').trim();
-  const recording = (req.query.recording as string || '').trim();
+  const album = (req.query.album as string || '').trim();
+  const recording = (req.query.recording as string || req.query.track as string || '').trim();
 
-  if (!query && (!artist || !recording)) {
+  if (!query && !artist && !album && !recording) {
     return res.json({ candidates: [] });
   }
 
-  // Resilient fallback to iTunes album search (prevents 503 errors and provides 1400x1400 art)
+  // Resilient iTunes fallback with Side Opener / Track 1 scoring
   const fetchItunesFallback = async () => {
     try {
-      const searchTerm = query || `${artist} ${recording}`;
-      const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(searchTerm)}&entity=album&limit=10`;
-      const iRes = await fetch(itunesUrl);
-      if (iRes.ok) {
-        const iData = await iRes.json();
-        return (iData.results || []).map((item: any) => ({
-          id: `itunes-${item.collectionId}`,
-          title: item.collectionName,
-          artist: item.artistName,
-          year: item.releaseDate ? item.releaseDate.substring(0, 4) : 'Release',
-          format: 'Studio Album (Official)',
-          isFullAlbum: true,
-          isCompilation: false,
-          typeLabel: 'Studio Album (Canonical)',
-          artUrl: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '1400x1400bb') : ''
-        }));
+      const candidates: any[] = [];
+      const headers = { 'User-Agent': 'Mozilla/5.0' };
+
+      // Search album collection
+      const albTerm = (artist && album) ? `${artist} ${album}` : (album || artist || query);
+      const albUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(albTerm)}&entity=album&limit=10`;
+      const albRes = await fetch(albUrl, { headers });
+      if (albRes.ok) {
+        const aData = await albRes.json();
+        for (const item of (aData.results || [])) {
+          const isLive = /live|bootleg/i.test(item.collectionName || '');
+          const isComp = /greatest hits|best of|anthology|collection/i.test(item.collectionName || '');
+          candidates.push({
+            id: `itunes-${item.collectionId}`,
+            title: item.collectionName,
+            artist: item.artistName,
+            year: item.releaseDate ? item.releaseDate.substring(0, 4) : 'Release',
+            format: '12" Vinyl LP',
+            isFullAlbum: !isLive && !isComp,
+            isCompilation: isComp,
+            typeLabel: isLive ? 'Live Recording' : isComp ? 'Compilation' : 'Studio Album (Canonical)',
+            trackCount: item.trackCount,
+            artUrl: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '1400x1400bb') : ''
+          });
+        }
       }
+
+      // If recording/track provided, search songs to find side openers (Track 1)
+      if (recording) {
+        const songTerm = artist ? `${artist} ${recording}` : recording;
+        const songUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(songTerm)}&entity=song&limit=10`;
+        const songRes = await fetch(songUrl, { headers });
+        if (songRes.ok) {
+          const sData = await songRes.json();
+          for (const item of (sData.results || [])) {
+            const isTrackOne = item.trackNumber === 1;
+            const isLive = /live/i.test(item.collectionName || '') || /live/i.test(item.trackName || '');
+            const isComp = /greatest hits|best of|anthology/i.test(item.collectionName || '');
+            
+            // Check if already in list
+            const existing = candidates.find(c => c.title.toLowerCase() === (item.collectionName || '').toLowerCase());
+            if (existing) {
+              if (isTrackOne) existing.sideOpener = 'Track 1 (Side A Opener)';
+              existing.trackCount = item.trackCount || existing.trackCount;
+            } else {
+              candidates.unshift({
+                id: `itunes-song-${item.collectionId}`,
+                title: item.collectionName,
+                artist: item.artistName,
+                year: item.releaseDate ? item.releaseDate.substring(0, 4) : 'Release',
+                format: '12" Vinyl LP',
+                isFullAlbum: !isLive && !isComp,
+                isCompilation: isComp,
+                sideOpener: isTrackOne ? 'Track 1 (Side A Opener)' : `Track ${item.trackNumber}`,
+                typeLabel: isLive ? 'Live Recording' : isComp ? 'Compilation' : 'Studio Album (Canonical)',
+                trackCount: item.trackCount,
+                artUrl: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '1400x1400bb') : ''
+              });
+            }
+          }
+        }
+      }
+
+      // Prioritize studio albums and side openers
+      candidates.sort((a, b) => {
+        const aScore = (a.sideOpener?.includes('Track 1') ? 50 : 0) + (a.isFullAlbum ? 30 : 0) - (a.isCompilation ? 20 : 0);
+        const bScore = (b.sideOpener?.includes('Track 1') ? 50 : 0) + (b.isFullAlbum ? 30 : 0) - (b.isCompilation ? 20 : 0);
+        return bScore - aScore;
+      });
+
+      return candidates.slice(0, 15);
     } catch {
-      // Non-fatal
+      return [];
     }
-    return [];
   };
 
   try {
-    const mbQuery = query 
-      ? encodeURIComponent(query)
-      : encodeURIComponent(`artist:"${artist}" AND recording:"${recording}"`);
+    const mbHeaders = {
+      'User-Agent': 'AnalogAir/1.2.0 ( contact@analogair.local; Distearth@gmail.com )'
+    };
 
-    const url = `https://musicbrainz.org/ws/2/recording?query=${mbQuery}&inc=release-groups+releases&fmt=json`;
-    
-    // MusicBrainz strictly requires a descriptive User-Agent
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'AnalogAir/1.0 (https://github.com/analogair/analogair-streamer; contact: stream@analogair.local)'
+    let artistMbid: string | null = null;
+    let canonicalArtist = artist;
+
+    // STEP 1: Artist Recovery Search (handles Kanji/Hanja/aliases)
+    if (artist) {
+      try {
+        const artistQuery = encodeURIComponent(`alias:"${artist}" OR artist:"${artist}"`);
+        const artistUrl = `https://musicbrainz.org/ws/2/artist?query=${artistQuery}&fmt=json&limit=3`;
+        const aRes = await fetch(artistUrl, { headers: mbHeaders });
+        if (aRes.ok) {
+          const aData = await aRes.json();
+          const firstArtist = (aData.artists || [])[0];
+          if (firstArtist) {
+            artistMbid = firstArtist.id;
+            canonicalArtist = firstArtist.name || artist;
+          }
+        }
+      } catch {
+        // Continue without artist MBID
       }
-    });
+    }
 
-    if (!response.ok) {
-      // MusicBrainz rate limits (503) or is temporarily unavailable: use instant iTunes fallback
-      const itunesCandidates = await fetchItunesFallback();
+    // STEP 2: Release Group (Master Release) Search
+    let rgUrl = '';
+    if (artistMbid && album) {
+      rgUrl = `https://musicbrainz.org/ws/2/release-group?query=arid:${artistMbid}%20AND%20releasegroupaccent:"${encodeURIComponent(album)}"%20AND%20primarytype:album&fmt=json&limit=10`;
+    } else if (album) {
+      const artClause = artist ? `artist:"${encodeURIComponent(artist)}" AND ` : '';
+      rgUrl = `https://musicbrainz.org/ws/2/release-group?query=${artClause}releasegroupaccent:"${encodeURIComponent(album)}"&fmt=json&limit=10`;
+    } else if (query) {
+      rgUrl = `https://musicbrainz.org/ws/2/release-group?query=releasegroupaccent:"${encodeURIComponent(query)}"&fmt=json&limit=10`;
+    }
+
+    const candidateMap = new Map<string, any>();
+
+    if (rgUrl) {
+      try {
+        const rgRes = await fetch(rgUrl, { headers: mbHeaders });
+        if (rgRes.ok) {
+          const rgData = await rgRes.json();
+          for (const rg of (rgData['release-groups'] || [])) {
+            const rgid = rg.id;
+            const rgTitle = rg.title;
+            const pType = rg['primary-type'] || 'Album';
+            const sTypes = rg['secondary-types'] || [];
+            const isFullAlbum = pType === 'Album' && sTypes.length === 0;
+            const isCompilation = pType === 'Compilation' || sTypes.includes('Compilation');
+            const year = (rg['first-release-date'] || '').substring(0, 4);
+
+            candidateMap.set(rgid, {
+              id: rgid,
+              releaseGroupMbid: rgid,
+              title: rgTitle,
+              artist: (rg['artist-credit'] || [{}])[0]?.name || canonicalArtist || artist,
+              year,
+              format: '12" Vinyl LP',
+              isFullAlbum,
+              isCompilation,
+              typeLabel: isFullAlbum ? 'Studio Album (Canonical)' : isCompilation ? 'Compilation' : pType,
+              score: rg.score || 80,
+              artUrl: `https://coverartarchive.org/release-group/${rgid}/front-500`
+            });
+          }
+        }
+      } catch {
+        // Fall through
+      }
+    }
+
+    // If candidate count is low, augment with iTunes high-res artwork & side openers
+    const itunesCandidates = await fetchItunesFallback();
+
+    // Merge candidates
+    const mbList = Array.from(candidateMap.values());
+    const finalCandidates = [...mbList, ...itunesCandidates].slice(0, 18);
+
+    if (finalCandidates.length === 0) {
       return res.json({ candidates: itunesCandidates });
     }
 
-    const data = await response.json();
-    const candidateMap = new Map<string, any>();
-
-    for (const rec of (data.recordings || [])) {
-      for (const release of (rec.releases || [])) {
-        if (release.status && release.status !== 'Official') continue;
-        const rg = release['release-group'] || {};
-        const rgId = rg.id || release.id;
-        const title = rg.title || release.title;
-        const relDate = rg['first-release-date'] || release.date || 'N/A';
-        const year = relDate.substring(0, 4);
-        const primaryType = rg['primary-type'] || 'Album';
-        const secondaryTypes = rg['secondary-types'] || [];
-
-        if (secondaryTypes.includes('Live') || secondaryTypes.includes('Bootleg')) continue;
-        if (candidateMap.has(rgId)) continue;
-
-        const isFullAlbum = primaryType === 'Album' && secondaryTypes.length === 0;
-        const isCompilation = primaryType === 'Compilation' || secondaryTypes.includes('Compilation');
-
-        candidateMap.set(rgId, {
-          id: release.id,
-          title,
-          artist: rec['artist-credit']?.[0]?.name || artist || 'Unknown Artist',
-          year,
-          format: release.media?.[0]?.format || '12" Vinyl',
-          isFullAlbum,
-          isCompilation,
-          typeLabel: isFullAlbum ? 'Studio Album (Canonical)' : isCompilation ? 'Compilation' : primaryType,
-          artUrl: `https://coverartarchive.org/release/${release.id}/front-500`
-        });
-      }
-    }
-
-    let candidates = Array.from(candidateMap.values())
-      .sort((a, b) => {
-        if (a.isFullAlbum && !b.isFullAlbum) return -1;
-        if (!a.isFullAlbum && b.isFullAlbum) return 1;
-        return (a.year || '9999').localeCompare(b.year || '9999');
-      })
-      .slice(0, 15);
-
-    if (candidates.length === 0) {
-      const itunesCandidates = await fetchItunesFallback();
-      if (itunesCandidates.length > 0) candidates = itunesCandidates;
-    }
-
-    res.json({ candidates });
+    res.json({ candidates: finalCandidates });
   } catch {
     const itunesCandidates = await fetchItunesFallback();
-    res.json({
-      candidates: itunesCandidates.length > 0 ? itunesCandidates : [
-        {
-          id: 'mbid-default-studio',
-          title: query || 'The Dark Side of the Moon',
-          artist: artist || 'Pink Floyd',
-          year: '1973',
-          format: '12" Vinyl LP (Stereo)',
-          isFullAlbum: true,
-          isCompilation: false,
-          typeLabel: 'Studio Album (Canonical)',
-          artUrl: 'https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=1000&q=80'
-        }
-      ]
-    });
+    res.json({ candidates: itunesCandidates });
   }
 });
 
-// 5. iTunes Artwork Search Proxy
+// 5. iTunes Artwork Search Proxy (Accepts artist, album, track, query)
 app.get('/api/search/itunes', async (req, res) => {
   const query = (req.query.query as string || '').trim();
-  if (!query) return res.json({ artwork: [] });
+  const artist = (req.query.artist as string || '').trim();
+  const album = (req.query.album as string || '').trim();
+  const track = (req.query.track as string || '').trim();
+
+  const searchTerm = (artist && album)
+    ? `${artist} ${album}`
+    : (album || artist || track || query);
+
+  if (!searchTerm) return res.json({ results: [] });
 
   try {
-    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=album&limit=6`;
-    const response = await fetch(url);
+    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(searchTerm)}&entity=album&limit=8`;
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
     const data = await response.json();
     
     const results = (data.results || []).map((item: any) => ({
