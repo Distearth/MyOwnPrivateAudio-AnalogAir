@@ -1,6 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Disc, Check, X, Image as ImageIcon, Sparkles, ExternalLink, Globe, Music, Layers } from 'lucide-react';
-import { MusicBrainzCandidate } from '../types';
+import {
+  Search,
+  Disc,
+  Check,
+  X,
+  Image as ImageIcon,
+  Sparkles,
+  ListMusic,
+  User,
+  Radio,
+  Clock,
+  Music,
+  ChevronDown,
+  ChevronUp,
+  Lock
+} from 'lucide-react';
+import { MusicBrainzCandidate, AlbumTracksResult, LikelyArtist } from '../types';
 
 interface MetadataEditorModalProps {
   isOpen: boolean;
@@ -37,27 +52,43 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
   currentMbid,
   onSaved
 }) => {
-  // Separate search fields for Artist and Album (+ optional Track)
+  // Search inputs
   const [searchArtist, setSearchArtist] = useState('');
   const [searchAlbum, setSearchAlbum] = useState('');
   const [searchTrack, setSearchTrack] = useState('');
 
-  // Target overrides to apply
+  // Target overrides
   const [customArtist, setCustomArtist] = useState(currentArtist);
   const [customAlbum, setCustomAlbum] = useState(currentAlbum);
   const [customArtUrl, setCustomArtUrl] = useState(currentArtUrl);
   const [selectedMbid, setSelectedMbid] = useState(currentMbid || '');
+  const [selectedOpenerTrack, setSelectedOpenerTrack] = useState('');
   const [format, setFormat] = useState('12" Vinyl LP');
   const [year, setYear] = useState('');
 
+  // Search results & categorization
   const [candidates, setCandidates] = useState<MusicBrainzCandidate[]>([]);
+  const [categorized, setCategorized] = useState<{
+    studio: MusicBrainzCandidate[];
+    compilations: MusicBrainzCandidate[];
+    live: MusicBrainzCandidate[];
+    singles: MusicBrainzCandidate[];
+  }>({ studio: [], compilations: [], live: [], singles: [] });
+  const [likelyArtists, setLikelyArtists] = useState<LikelyArtist[]>([]);
   const [itunesArtworks, setItunesArtworks] = useState<Array<{ album: string; artworkUrl: string; artist: string; releaseDate?: string; trackCount?: number }>>([]);
+
+  // Tracklist inspection state
+  const [inspectingId, setInspectingId] = useState<string | null>(null);
+  const [albumTracklist, setAlbumTracklist] = useState<AlbumTracksResult | null>(null);
+  const [isLoadingTracks, setIsLoadingTracks] = useState(false);
+
+  // UI state
   const [isSearching, setIsSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<'mb' | 'itunes' | 'manual'>('mb');
+  const [activeCategory, setActiveCategory] = useState<'studio' | 'compilations' | 'live' | 'all' | 'itunes' | 'manual'>('studio');
   const [message, setMessage] = useState<string | null>(null);
 
-  // Initialize modal state whenever opened
+  // Initialize modal state on open
   useEffect(() => {
     if (isOpen) {
       const initArtist = isTurntableOrIdle(currentArtist) ? '' : currentArtist;
@@ -72,13 +103,17 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
       setCustomAlbum(initAlbum || currentAlbum);
       setCustomArtUrl(currentArtUrl);
       setSelectedMbid(currentMbid || '');
+      setSelectedOpenerTrack(initTrack || '');
       setMessage(null);
+      setInspectingId(null);
+      setAlbumTracklist(null);
 
-      // Auto-trigger search if we have artist or album
       if (initArtist || initAlbum || initTrack) {
         handleSearch(initArtist, initAlbum, initTrack);
       } else {
         setCandidates([]);
+        setCategorized({ studio: [], compilations: [], live: [], singles: [] });
+        setLikelyArtists([]);
         setItunesArtworks([]);
       }
     }
@@ -100,7 +135,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
     setMessage(null);
 
     try {
-      // 1. MusicBrainz Master Release / Release Group Search
+      // 1. MusicBrainz & Discography search
       const mbParams = new URLSearchParams();
       if (art) mbParams.set('artist', art);
       if (alb) mbParams.set('album', alb);
@@ -108,11 +143,36 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
 
       const mbRes = await fetch(`/api/search/musicbrainz?${mbParams.toString()}`);
       const isMbJson = mbRes.ok && (mbRes.headers.get('content-type') || '').includes('application/json');
-      const mbData = isMbJson ? await mbRes.json() : { candidates: [] };
+      const mbData = isMbJson ? await mbRes.json() : { candidates: [], likelyArtists: [], categorized: {} };
+      
       const mbCandidates: MusicBrainzCandidate[] = mbData.candidates || [];
-      setCandidates(mbCandidates);
+      const artistsList: LikelyArtist[] = mbData.likelyArtists || [];
+      const cats = mbData.categorized || {
+        studio: mbCandidates.filter(c => c.isFullAlbum && !c.isSingle),
+        compilations: mbCandidates.filter(c => c.isCompilation),
+        live: mbCandidates.filter(c => c.isLive),
+        singles: mbCandidates.filter(c => c.isSingle)
+      };
 
-      // 2. iTunes High-Res Cover Art & Tracklist Database
+      setCandidates(mbCandidates);
+      setCategorized({
+        studio: cats.studio || [],
+        compilations: cats.compilations || [],
+        live: cats.live || [],
+        singles: cats.singles || []
+      });
+      setLikelyArtists(artistsList);
+
+      // Default category tab to Studio if studio albums exist, otherwise Compilations or All
+      if (cats.studio && cats.studio.length > 0) {
+        setActiveCategory('studio');
+      } else if (cats.compilations && cats.compilations.length > 0) {
+        setActiveCategory('compilations');
+      } else {
+        setActiveCategory('all');
+      }
+
+      // 2. iTunes Cover Art Gallery
       const itunesParams = new URLSearchParams();
       if (art) itunesParams.set('artist', art);
       if (alb) itunesParams.set('album', alb);
@@ -125,10 +185,10 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
       setItunesArtworks(arts);
 
       if (mbCandidates.length === 0 && arts.length === 0) {
-        setMessage('No exact match found. Try entering alternative spelling or set custom details manually.');
+        setMessage('No exact album matched. Check spelling, pick a likely artist below, or enter custom details.');
       }
     } catch {
-      setMessage('Search request failed. You can enter details manually below.');
+      setMessage('Search error. You can select an artist, enter custom details, or try again.');
     } finally {
       setIsSearching(false);
     }
@@ -141,7 +201,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
     setFormat(c.format || '12" Vinyl LP');
     setYear(c.year || '');
 
-    // Match best artwork: CAA first if present, or match from iTunes gallery
+    // Set high-res artwork (1400x1400 preferred, or CAA 500px)
     if (c.artUrl && c.artUrl.startsWith('http')) {
       setCustomArtUrl(c.artUrl);
     } else {
@@ -153,11 +213,47 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
         setCustomArtUrl(matchedArt.artworkUrl);
       }
     }
+
+    // Auto-fetch tracklist for side opener inspection
+    inspectTracklist(c);
+  };
+
+  const inspectTracklist = async (c: MusicBrainzCandidate) => {
+    if (inspectingId === c.id) {
+      setInspectingId(null);
+      return;
+    }
+
+    setInspectingId(c.id);
+    setIsLoadingTracks(true);
+    setAlbumTracklist(null);
+
+    try {
+      const params = new URLSearchParams();
+      if (c.collectionId) {
+        params.set('collectionId', c.collectionId.toString());
+      }
+      params.set('artist', c.artist || searchArtist);
+      params.set('album', c.title);
+
+      const res = await fetch(`/api/album-tracks?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setAlbumTracklist(data);
+        // If track 1 exists and no opener chosen, set Track 1 as default opener
+        if (data.sideAOpener && (!selectedOpenerTrack || selectedOpenerTrack === currentTitle)) {
+          setSelectedOpenerTrack(data.sideAOpener);
+        }
+      }
+    } catch {
+      // Non-blocking
+    } finally {
+      setIsLoadingTracks(false);
+    }
   };
 
   const handleSaveOverride = async () => {
     setIsSaving(true);
-    // Use identified track opener or fallback key
     const trackKey = (currentArtist && currentTitle && !isTurntableOrIdle(currentTitle))
       ? `${currentArtist} - ${currentTitle}`
       : `${customArtist} - ${customAlbum}`;
@@ -168,6 +264,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           trackKey,
+          openerTrack: selectedOpenerTrack.trim(),
           customArtist: customArtist.trim(),
           customAlbum: customAlbum.trim(),
           customArtUrl: customArtUrl.trim(),
@@ -189,6 +286,23 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
       setIsSaving(false);
     }
   };
+
+  // Get current candidate list depending on active category tab
+  const getVisibleCandidates = () => {
+    switch (activeCategory) {
+      case 'studio':
+        return categorized.studio.length > 0 ? categorized.studio : candidates.filter(c => c.isFullAlbum);
+      case 'compilations':
+        return categorized.compilations;
+      case 'live':
+        return categorized.live;
+      case 'all':
+      default:
+        return candidates;
+    }
+  };
+
+  const visibleCandidates = getVisibleCandidates();
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
@@ -219,7 +333,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
+        <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4">
           {/* Dual Search Box: Artist & Album Separated */}
           <div className="p-4 bg-neutral-950/80 border border-neutral-800 rounded-2xl space-y-3">
             <div className="flex items-center justify-between">
@@ -228,7 +342,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
                 <span>Search MusicBrainz & iTunes</span>
               </span>
               <span className="text-[11px] text-neutral-500">
-                Targeted Artist & Album Query
+                Discography & Side Opener Matching
               </span>
             </div>
 
@@ -236,7 +350,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
               {/* Artist Search Box */}
               <div>
                 <label className="text-[11px] font-semibold text-neutral-400 mb-1 block">
-                  Artist (e.g. Morrissey, Pink Floyd, 紅雀)
+                  Artist (e.g. Talk Talk, Morrissey, Pink Floyd)
                 </label>
                 <input
                   type="text"
@@ -251,7 +365,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
               {/* Album Search Box */}
               <div>
                 <label className="text-[11px] font-semibold text-neutral-400 mb-1 block">
-                  Album Title (e.g. Your Arsenal, Benisuzume)
+                  Album Title (e.g. The Colour of Spring)
                 </label>
                 <input
                   type="text"
@@ -272,7 +386,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
                   value={searchTrack}
                   onChange={(e) => setSearchTrack(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                  placeholder="Track / Side Opener (optional, e.g. You're Gonna Need Someone on Your Side)"
+                  placeholder="Side Opener / Track 1 (optional, e.g. Happiness is easy)"
                   className="w-full px-3 py-2 bg-neutral-900/70 border border-neutral-800/80 focus:border-amber-500 rounded-xl text-neutral-300 text-xs focus:outline-none transition-colors"
                 />
               </div>
@@ -286,11 +400,38 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
                 ) : (
                   <>
                     <Search className="w-3.5 h-3.5" />
-                    <span>Search Databases</span>
+                    <span>Search Discography</span>
                   </>
                 )}
               </button>
             </div>
+
+            {/* Likely Artists Fallback Pill List */}
+            {likelyArtists.length > 0 && (
+              <div className="pt-2 border-t border-neutral-850 flex items-center gap-2 flex-wrap text-xs">
+                <span className="text-neutral-400 font-medium flex items-center gap-1">
+                  <User className="w-3 h-3 text-amber-400" />
+                  <span>Artists:</span>
+                </span>
+                {likelyArtists.map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => {
+                      setSearchArtist(a.name);
+                      handleSearch(a.name, searchAlbum, searchTrack);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1 ${
+                      searchArtist.toLowerCase() === a.name.toLowerCase()
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                        : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'
+                    }`}
+                  >
+                    <span>{a.name}</span>
+                    <span className="text-[10px] text-neutral-500">({a.genre})</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {message && (
@@ -299,115 +440,235 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
             </div>
           )}
 
-          {/* Search Results Navigation Tabs */}
-          <div className="flex border-b border-neutral-800 text-xs font-medium">
+          {/* Categorized Filter Tabs (Studio, Compilations, Live, Art Gallery, Manual) */}
+          <div className="flex border-b border-neutral-800 text-xs font-medium overflow-x-auto gap-1">
             <button
-              onClick={() => setActiveTab('mb')}
-              className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 ${
-                activeTab === 'mb'
-                  ? 'border-amber-500 text-amber-400'
+              onClick={() => setActiveCategory('studio')}
+              className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                activeCategory === 'studio'
+                  ? 'border-amber-500 text-amber-400 font-bold'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
               }`}
             >
               <Disc className="w-3.5 h-3.5" />
-              <span>MusicBrainz & Vinyl ({candidates.length})</span>
+              <span>Studio Albums ({categorized.studio.length})</span>
             </button>
             <button
-              onClick={() => setActiveTab('itunes')}
-              className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 ${
-                activeTab === 'itunes'
-                  ? 'border-amber-500 text-amber-400'
+              onClick={() => setActiveCategory('compilations')}
+              className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                activeCategory === 'compilations'
+                  ? 'border-amber-500 text-amber-400 font-bold'
+                  : 'border-transparent text-neutral-400 hover:text-neutral-200'
+              }`}
+            >
+              <Radio className="w-3.5 h-3.5" />
+              <span>Compilations ({categorized.compilations.length})</span>
+            </button>
+            <button
+              onClick={() => setActiveCategory('live')}
+              className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                activeCategory === 'live'
+                  ? 'border-amber-500 text-amber-400 font-bold'
+                  : 'border-transparent text-neutral-400 hover:text-neutral-200'
+              }`}
+            >
+              <Music className="w-3.5 h-3.5" />
+              <span>Live ({categorized.live.length})</span>
+            </button>
+            <button
+              onClick={() => setActiveCategory('all')}
+              className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                activeCategory === 'all'
+                  ? 'border-amber-500 text-amber-400 font-bold'
+                  : 'border-transparent text-neutral-400 hover:text-neutral-200'
+              }`}
+            >
+              <span>All ({candidates.length})</span>
+            </button>
+            <button
+              onClick={() => setActiveCategory('itunes')}
+              className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                activeCategory === 'itunes'
+                  ? 'border-amber-500 text-amber-400 font-bold'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
               }`}
             >
               <ImageIcon className="w-3.5 h-3.5" />
-              <span>Cover Art Gallery ({itunesArtworks.length})</span>
+              <span>Art Gallery ({itunesArtworks.length})</span>
             </button>
             <button
-              onClick={() => setActiveTab('manual')}
-              className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 ${
-                activeTab === 'manual'
-                  ? 'border-amber-500 text-amber-400'
+              onClick={() => setActiveCategory('manual')}
+              className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                activeCategory === 'manual'
+                  ? 'border-amber-500 text-amber-400 font-bold'
                   : 'border-transparent text-neutral-400 hover:text-neutral-200'
               }`}
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Custom Manual Fields</span>
+              <span>Manual</span>
             </button>
           </div>
 
-          {/* Tab 1: MusicBrainz Release Groups & Vinyl Candidates */}
-          {activeTab === 'mb' && (
-            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-              {candidates.length === 0 && !isSearching && (
+          {/* Release List (Studio / Compilations / Live / All) */}
+          {(activeCategory === 'studio' || activeCategory === 'compilations' || activeCategory === 'live' || activeCategory === 'all') && (
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              {visibleCandidates.length === 0 && !isSearching && (
                 <div className="text-center py-8 text-neutral-500 text-xs">
-                  Enter an Artist or Album above and click <strong>Search Databases</strong> to find canonical studio albums and vinyl pressings.
+                  No {activeCategory} albums found for this query. Try switching to <strong>All Releases</strong> or clicking a likely artist above.
                 </div>
               )}
-              {candidates.map((c) => {
-                const isSelected = customAlbum === c.title;
+              {visibleCandidates.map((c) => {
+                const isSelected = customAlbum.toLowerCase() === c.title.toLowerCase();
+                const isExpanded = inspectingId === c.id;
+
                 return (
                   <div
                     key={c.id}
-                    onClick={() => selectCandidate(c)}
-                    className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                    className={`rounded-xl border transition-all overflow-hidden ${
                       isSelected
                         ? 'bg-amber-500/15 border-amber-500/50 text-neutral-100 shadow-md ring-1 ring-amber-500/30'
                         : 'bg-neutral-950/60 border-neutral-800/80 hover:border-neutral-700 text-neutral-300'
                     }`}
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-11 h-11 rounded-lg bg-neutral-800 flex items-center justify-center text-neutral-400 font-mono text-xs overflow-hidden shrink-0">
-                        {c.artUrl ? (
-                          <img
-                            src={c.artUrl}
-                            alt=""
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              (e.target as HTMLElement).style.display = 'none';
-                            }}
-                          />
-                        ) : (
-                          <Disc className="w-5 h-5 text-amber-400/60" />
+                    <div
+                      onClick={() => selectCandidate(c)}
+                      className="p-3 cursor-pointer flex items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div className="w-12 h-12 rounded-lg bg-neutral-800 flex items-center justify-center text-neutral-400 font-mono text-xs overflow-hidden shrink-0 shadow">
+                          {c.artUrl ? (
+                            <img
+                              src={c.artUrl}
+                              alt=""
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLElement).style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <Disc className="w-5 h-5 text-amber-400/60" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-sm flex items-center gap-1.5 flex-wrap">
+                            <span className="truncate">{c.title}</span>
+                            {c.isFullAlbum && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-normal">
+                                Studio LP
+                              </span>
+                            )}
+                            {c.isCompilation && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-950 text-blue-300 border border-blue-800 font-normal">
+                                Compilation
+                              </span>
+                            )}
+                            {c.isLive && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 border border-purple-800 font-normal">
+                                Live
+                              </span>
+                            )}
+                            {c.sideOpener && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-800 font-normal">
+                                {c.sideOpener}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-neutral-400 flex items-center gap-2 mt-0.5 flex-wrap">
+                            <span className="text-neutral-300">{c.artist}</span>
+                            <span>•</span>
+                            <span>{c.year || 'Release'}</span>
+                            <span>•</span>
+                            <span className="text-neutral-500">{c.format}</span>
+                            {c.trackCount && (
+                              <>
+                                <span>•</span>
+                                <span className="text-neutral-500">{c.trackCount} Tracks</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            inspectTracklist(c);
+                          }}
+                          className="p-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200 border border-neutral-800 text-xs flex items-center gap-1"
+                          title="Inspect tracklist & side openers"
+                        >
+                          <ListMusic className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Tracks</span>
+                          {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                        </button>
+                        {isSelected && (
+                          <div className="w-6 h-6 rounded-full bg-amber-500 text-neutral-950 flex items-center justify-center shrink-0">
+                            <Check className="w-3.5 h-3.5 stroke-[3]" />
+                          </div>
                         )}
                       </div>
-                      <div className="min-w-0">
-                        <div className="font-semibold text-sm flex items-center gap-1.5 flex-wrap">
-                          <span className="truncate">{c.title}</span>
-                          {c.isFullAlbum && (
-                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-normal">
-                              Studio LP
-                            </span>
-                          )}
-                          {c.isCompilation && (
-                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-950 text-blue-300 border border-blue-800 font-normal">
-                              Compilation
-                            </span>
-                          )}
-                          {c.sideOpener && (
-                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-800 font-normal">
-                              {c.sideOpener}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-xs text-neutral-400 flex items-center gap-2 mt-0.5 flex-wrap">
-                          <span className="text-neutral-300">{c.artist}</span>
-                          <span>•</span>
-                          <span>{c.year || 'Release'}</span>
-                          <span>•</span>
-                          <span className="text-neutral-500">{c.format}</span>
-                          {c.trackCount && (
-                            <>
-                              <span>•</span>
-                              <span className="text-neutral-500">{c.trackCount} Tracks</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
                     </div>
-                    {isSelected && (
-                      <div className="w-6 h-6 rounded-full bg-amber-500 text-neutral-950 flex items-center justify-center shrink-0 ml-2">
-                        <Check className="w-3.5 h-3.5 stroke-[3]" />
+
+                    {/* Expandable Tracklist Inspector */}
+                    {isExpanded && (
+                      <div className="border-t border-neutral-800 bg-neutral-950/90 p-3 space-y-2 text-xs">
+                        <div className="flex items-center justify-between text-neutral-400">
+                          <span className="font-semibold flex items-center gap-1.5">
+                            <ListMusic className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Tracklist & Vinyl Side Openers</span>
+                          </span>
+                          {albumTracklist && (
+                            <span className="text-[11px] text-neutral-500">
+                              Side A Opener: <strong className="text-neutral-300">{albumTracklist.sideAOpener || 'Track 1'}</strong>
+                              {albumTracklist.sideBOpener ? ` | Side B: ${albumTracklist.sideBOpener}` : ''}
+                            </span>
+                          )}
+                        </div>
+
+                        {isLoadingTracks && (
+                          <div className="text-center py-3 text-neutral-500 text-xs">
+                            Loading vinyl tracklist...
+                          </div>
+                        )}
+
+                        {albumTracklist && albumTracklist.tracks.length > 0 && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
+                            {albumTracklist.tracks.map((t) => {
+                              const isOpenerSelected = selectedOpenerTrack.toLowerCase() === t.title.toLowerCase();
+                              return (
+                                <button
+                                  type="button"
+                                  key={t.trackNumber}
+                                  onClick={() => setSelectedOpenerTrack(t.title)}
+                                  className={`p-2 rounded-lg text-left border flex items-center justify-between transition-colors ${
+                                    isOpenerSelected
+                                      ? 'bg-amber-500/20 border-amber-500/50 text-amber-200'
+                                      : 'bg-neutral-900/80 border-neutral-800 hover:border-neutral-700 text-neutral-300'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-400">
+                                      {t.side}{t.trackNumber}
+                                    </span>
+                                    <span className="truncate font-medium">{t.title}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                    {t.isOpener && (
+                                      <span className="text-[9px] px-1 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-800">
+                                        {t.openerLabel}
+                                      </span>
+                                    )}
+                                    {t.duration && (
+                                      <span className="text-[10px] text-neutral-500 font-mono">{t.duration}</span>
+                                    )}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -416,9 +677,9 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
             </div>
           )}
 
-          {/* Tab 2: iTunes Cover Art Picker */}
-          {activeTab === 'itunes' && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-56 overflow-y-auto p-1">
+          {/* Tab: iTunes Cover Art Picker */}
+          {activeCategory === 'itunes' && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-60 overflow-y-auto p-1">
               {itunesArtworks.length === 0 && !isSearching && (
                 <div className="col-span-full text-center py-8 text-neutral-500 text-xs">
                   No images loaded. Enter Artist and Album to browse high-res artwork options.
@@ -457,8 +718,8 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
             </div>
           )}
 
-          {/* Tab 3: Custom Manual Fields */}
-          {activeTab === 'manual' && (
+          {/* Tab: Custom Manual Fields */}
+          {activeCategory === 'manual' && (
             <div className="p-4 bg-neutral-950/60 border border-neutral-800 rounded-xl space-y-3 text-xs">
               <p className="text-neutral-400">
                 You can manually enter the release metadata and format specifications below:
@@ -470,7 +731,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
                     type="text"
                     value={year}
                     onChange={(e) => setYear(e.target.value)}
-                    placeholder="e.g. 1992"
+                    placeholder="e.g. 1986"
                     className="w-full px-2.5 py-1.5 bg-neutral-900 border border-neutral-800 rounded-lg text-white"
                   />
                 </div>
@@ -490,9 +751,17 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
 
           {/* Target Metadata Preview & Output */}
           <div className="p-4 bg-neutral-950/80 border border-neutral-800 rounded-xl space-y-3">
-            <div className="text-xs font-semibold text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span>Target Metadata Applied to AirPlay & Stream</span>
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-semibold text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>Target Metadata Applied to AirPlay & Stream</span>
+              </div>
+              {selectedOpenerTrack && (
+                <span className="text-[11px] text-amber-300 font-medium flex items-center gap-1">
+                  <Lock className="w-3 h-3 text-amber-400" />
+                  <span>Locked Opener: {selectedOpenerTrack}</span>
+                </span>
+              )}
             </div>
 
             <div className="flex gap-4 items-center">
@@ -522,7 +791,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
                     type="text"
                     value={customAlbum}
                     onChange={(e) => setCustomAlbum(e.target.value)}
-                    placeholder="e.g. Your Arsenal"
+                    placeholder="e.g. The Colour of Spring"
                     className="w-full px-2.5 py-1.5 bg-neutral-900 border border-neutral-800 rounded-lg text-white text-sm focus:outline-none focus:border-amber-500"
                   />
                 </div>
@@ -533,7 +802,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
                       type="text"
                       value={customArtist}
                       onChange={(e) => setCustomArtist(e.target.value)}
-                      placeholder="e.g. Morrissey"
+                      placeholder="e.g. Talk Talk"
                       className="w-full px-2.5 py-1.5 bg-neutral-900 border border-neutral-800 rounded-lg text-white text-sm focus:outline-none focus:border-amber-500"
                     />
                   </div>

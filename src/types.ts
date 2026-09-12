@@ -70,12 +70,39 @@ export interface MusicBrainzCandidate {
   format: string;
   isFullAlbum: boolean;
   isCompilation: boolean;
+  isLive?: boolean;
+  isSingle?: boolean;
   typeLabel: string;
   artUrl?: string;
   score?: number;
   sideOpener?: string;
   trackCount?: number;
+  collectionId?: number;
   releaseGroupMbid?: string;
+}
+
+export interface AlbumTrack {
+  trackNumber: number;
+  title: string;
+  duration: string;
+  side: 'A' | 'B';
+  isOpener: boolean;
+  openerLabel?: string;
+}
+
+export interface AlbumTracksResult {
+  collectionId?: string | number;
+  totalTracks: number;
+  sideAOpener?: string;
+  sideBOpener?: string;
+  tracks: AlbumTrack[];
+}
+
+export interface LikelyArtist {
+  id: string;
+  name: string;
+  genre: string;
+  source: string;
 }
 
 export interface PlaySession {

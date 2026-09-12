@@ -97,14 +97,45 @@ def get_setting(key, default=""):
     except:
         return default
 
-def get_override(track_key):
+def get_override(track_key, artist=None, title=None):
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
+        # 1. Exact match
         c.execute("SELECT custom_artist, custom_album, custom_art_url, release_mbid FROM release_overrides WHERE track_key=?", (track_key,))
         row = c.fetchone()
+        if row:
+            conn.close()
+            return row
+
+        # 2. Case-insensitive match
+        c.execute("SELECT custom_artist, custom_album, custom_art_url, release_mbid FROM release_overrides WHERE LOWER(track_key)=LOWER(?)", (track_key,))
+        row = c.fetchone()
+        if row:
+            conn.close()
+            return row
+
+        # 3. Cleaned title match (strips (Remaster), etc.)
+        if artist and title:
+            clean_t = sanitize_track_title(title)
+            clean_key = f"{artist} - {clean_t}"
+            c.execute("SELECT custom_artist, custom_album, custom_art_url, release_mbid FROM release_overrides WHERE LOWER(track_key)=LOWER(?)", (clean_key,))
+            row = c.fetchone()
+            if row:
+                conn.close()
+                return row
+
+            # 4. Opener / title substring match for the same artist
+            c.execute("SELECT custom_artist, custom_album, custom_art_url, release_mbid, track_key FROM release_overrides WHERE LOWER(custom_artist)=LOWER(?)", (artist,))
+            for r in c.fetchall():
+                saved_key = (r[4] or "").lower()
+                clean_lower = clean_t.lower()
+                if clean_lower in saved_key or saved_key.endswith(f"- {clean_lower}"):
+                    conn.close()
+                    return r[:4]
+
         conn.close()
-        return row if row else None
+        return None
     except:
         return None
 
@@ -288,22 +319,24 @@ def resolve_canonical_vinyl_album(artist, title, candidate_album=None):
             score = 0
             # Side opener bonus (Track 1 is Side A opener)
             if t_num == 1:
-                score += 50
+                score += 80
             elif t_num in (2, 3, 4, 5, 6):
-                score += 20
+                score += 15
 
-            # Studio album priority
+            # Studio LP priority (Canonical studio releases get top priority over compilations and live albums)
             if not is_live and not is_comp:
-                score += 35
+                score += 60
             if is_live:
-                score -= 45
+                score -= 50
             if is_comp:
-                score -= 25
+                score -= 40
+                if t_num != 1:
+                    score -= 50  # Strongly penalize compilation if this track is not track 1
 
             # If candidate_album was provided and matches (and isn't idle/turntable)
             if candidate_album and not is_turntable_string(candidate_album):
                 if coll.lower() in candidate_album.lower() or candidate_album.lower() in coll.lower():
-                    score += 15
+                    score += 25
 
             if score > highest_score:
                 highest_score = score
@@ -420,6 +453,55 @@ def get_owntone_player_info():
         pass
 
     return player_state, has_active_speakers
+
+def get_favorite_speaker_ids():
+    """Retrieves speaker IDs marked for auto-connect/favorite in the database."""
+    favs = set()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT output_id FROM favorite_speakers")
+        for row in c.fetchall():
+            favs.add(str(row[0]))
+        conn.close()
+    except Exception:
+        pass
+    return favs
+
+def reconnect_marked_speakers():
+    """
+    Connects to speakers marked for auto-connect / favorite if none are currently active,
+    or if marked speakers got deselected during an HDMI or source switch.
+    """
+    fav_ids = get_favorite_speaker_ids()
+    if not fav_ids:
+        return
+    try:
+        r_o = requests.get("http://127.0.0.1:3689/api/outputs", timeout=2)
+        if r_o.status_code == 200:
+            outputs = r_o.json().get("outputs", [])
+            for o in outputs:
+                oid = str(o.get("id"))
+                if oid in fav_ids and not o.get("selected", False):
+                    requests.put(f"http://127.0.0.1:3689/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
+                    print(f"[AnalogAir] Auto-reconnected marked speaker: {o.get('name')}", flush=True)
+    except Exception as e:
+        print(f"[AnalogAir] Speaker auto-reconnect error: {e}", flush=True)
+
+def check_and_stop_owntone_if_no_speakers():
+    """
+    If OwnTone is running but disconnected from all speakers (e.g. user switched receiver
+    to TV), stop playback so OwnTone does not keep buffering audio into memory.
+    """
+    try:
+        ot_state, has_speakers = get_owntone_player_info()
+        if ot_state == "play" and not has_speakers:
+            print("[AnalogAir] OwnTone is playing but no speakers are connected! Stopping stream to clear buffer backlog...", flush=True)
+            set_owntone_player("stop")
+            return True
+    except Exception:
+        pass
+    return False
 
 def purge_pipeline_and_restart_owntone():
     """
@@ -667,6 +749,9 @@ async def main():
 
         if not has_signal:
             silence_counter += 1
+            # Check if OwnTone is streaming to nowhere (e.g. switched to TV)
+            check_and_stop_owntone_if_no_speakers()
+
             if is_playing and silence_counter >= max_silence_counts:
                 print(f"[AnalogAir] Silence confirmed ({silence_timeout_sec}s). Needle lifted, restoring Standby.", flush=True)
                 write_to_pipe(make_xml(idle_title, idle_artist, idle_album))
@@ -675,7 +760,7 @@ async def main():
                 session_locked = False
                 current_track_id = None
                 resolved_art = None
-                set_owntone_player("pause")
+                set_owntone_player("stop")
                 try:
                     with open(STATE_FILE, "w") as sf:
                         json.dump({
@@ -710,6 +795,9 @@ async def main():
             was_silent_session = not is_playing or silence_counter >= max_silence_counts
             silence_counter = 0
 
+            # Reconnect speakers marked for auto-connect if disconnected
+            reconnect_marked_speakers()
+
             if not is_playing:
                 is_playing = True
                 print(f"[AnalogAir] Needle drop detected! (RMS: {rms:.5f} >= {silence_thresh:.5f})", flush=True)
@@ -723,6 +811,7 @@ async def main():
                     print("[AnalogAir] OwnTone was not actively streaming during silence period. Purging 30s buffer backlog to ensure near-instant real-time playback...", flush=True)
                     purge_pipeline_and_restart_owntone()
                     time.sleep(1.8)
+                    reconnect_marked_speakers()
                 
                 # Start or resume OwnTone stream
                 set_owntone_player("play")
@@ -814,7 +903,7 @@ async def main():
                             base_album = sanitize_album_title(raw_album)
 
                             track_key = f"{raw_artist} - {raw_title}"
-                            override = get_override(track_key)
+                            override = get_override(track_key, artist=raw_artist, title=raw_title)
                             custom_art_url = None
 
                             if override:

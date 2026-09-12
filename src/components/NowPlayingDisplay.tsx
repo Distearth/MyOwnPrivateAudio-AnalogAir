@@ -632,12 +632,49 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
         </div>
       </footer>
 
-      {/* ONE-BUTTON LIVE BACKGROUND STREAM PLAYER (Bottom Right on Screen) */}
+      {/* BOTTOM RIGHT FLOATING CONTROLS (Purge Buffer & Listen Live) */}
       <div
-        className={`fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-30 flex items-center transition-all duration-500 ${
+        className={`fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-30 flex items-center gap-2 transition-all duration-500 ${
           isFaded && !isStreamingAudio ? 'opacity-40 hover:opacity-100' : 'opacity-100'
         }`}
       >
+        {/* Quick Purge Buffer Button */}
+        <button
+          id="floating-purge-buffer-btn"
+          onClick={async (e) => {
+            e.stopPropagation();
+            if (onWakeScreen) onWakeScreen();
+            if (isPurging) return;
+            setIsPurging(true);
+            setPurgeFeedback('Purging...');
+            try {
+              if (onPurgeBuffer) {
+                await onPurgeBuffer();
+              }
+              setPurgeFeedback('Resynced');
+              setTimeout(() => setPurgeFeedback(null), 3000);
+            } catch {
+              setPurgeFeedback('Failed');
+              setTimeout(() => setPurgeFeedback(null), 3000);
+            } finally {
+              setIsPurging(false);
+            }
+          }}
+          disabled={isPurging}
+          title="Purge 30s audio delay & restart stream in real time"
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-full border text-xs font-sans font-semibold tracking-wide transition-all shadow-xl active:scale-95 select-none backdrop-blur-md ${
+            isPurging
+              ? 'bg-amber-950/80 text-amber-300 border-amber-500/50 cursor-wait'
+              : purgeFeedback
+              ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50'
+              : 'bg-neutral-900/90 hover:bg-neutral-800 text-neutral-200 hover:text-white border-neutral-700/80'
+          }`}
+        >
+          <RefreshCw className={`w-3.5 h-3.5 text-amber-400 ${isPurging ? 'animate-spin' : ''}`} />
+          <span>{purgeFeedback || (isPurging ? 'Purging...' : 'Purge Buffer')}</span>
+        </button>
+
+        {/* Live Audio Stream Player */}
         <button
           id="toggle-stream-btn"
           onClick={toggleStreamPlayback}
