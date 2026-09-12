@@ -65,6 +65,7 @@ interface ControlsOverlayProps {
   onOpenEditMetadata: () => void;
   onUpdateSettings: (newSettings: Partial<SystemPreferences>) => void;
   onDeleteSession: (id: string) => void;
+  onPurgeBuffer?: () => Promise<void> | void;
 }
 
 export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
@@ -82,7 +83,8 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
   onToggleMode,
   onOpenEditMetadata,
   onUpdateSettings,
-  onDeleteSession
+  onDeleteSession,
+  onPurgeBuffer
 }) => {
   const [activeTab, setActiveTab] = useState<'quick' | 'tone' | 'speakers' | 'history' | 'update' | 'settings'>('quick');
   const [copiedCmdId, setCopiedCmdId] = useState<string | null>(null);
@@ -91,7 +93,27 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
   const [isDraggingArt, setIsDraggingArt] = useState(false);
   const [powerActionStatus, setPowerActionStatus] = useState<string | null>(null);
   const [showPowerConfirm, setShowPowerConfirm] = useState<'shutdown' | 'reboot' | null>(null);
+  const [isPurgingStream, setIsPurgingStream] = useState(false);
+  const [purgeFeedback, setPurgeFeedback] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handlePurgeBuffers = async () => {
+    if (isPurgingStream) return;
+    setIsPurgingStream(true);
+    setPurgeFeedback('Purging buffers & restarting stream...');
+    try {
+      if (onPurgeBuffer) {
+        await onPurgeBuffer();
+      }
+      setPurgeFeedback('Stream restarted in real-time');
+      setTimeout(() => setPurgeFeedback(null), 3500);
+    } catch {
+      setPurgeFeedback('Purge failed');
+      setTimeout(() => setPurgeFeedback(null), 3000);
+    } finally {
+      setIsPurgingStream(false);
+    }
+  };
 
   const handleTriggerPower = async (action: 'shutdown' | 'reboot') => {
     try {
@@ -631,22 +653,39 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
           {/* TAB 3: OWNTONE SPEAKERS */}
           {activeTab === 'speakers' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h3 className="text-base font-bold text-neutral-100">AirPlay & Speaker Outputs</h3>
                   <p className="text-xs text-neutral-400">
                     Selecting any destination sets volume to 100% and automatically resumes stream playback from the vinyl pipe.
                   </p>
                 </div>
-                <a
-                  href={`http://${window.location.hostname}:3689/#/outputs`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium rounded-lg border border-neutral-700 transition-colors flex items-center gap-1.5"
-                >
-                  <span>Open OwnTone Web</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handlePurgeBuffers}
+                    disabled={isPurgingStream}
+                    title="Clear 30s playback delay by restarting OwnTone and capture pipe"
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-all flex items-center gap-1.5 shadow-sm active:scale-95 ${
+                      isPurgingStream
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 cursor-wait'
+                        : purgeFeedback
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                        : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border-neutral-700'
+                    }`}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 text-amber-400 ${isPurgingStream ? 'animate-spin' : ''}`} />
+                    <span>{purgeFeedback || (isPurgingStream ? 'Purging...' : 'Purge Buffer & Resync')}</span>
+                  </button>
+                  <a
+                    href={`http://${window.location.hostname}:3689/#/outputs`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium rounded-lg border border-neutral-700 transition-colors flex items-center gap-1.5"
+                  >
+                    <span>Open OwnTone Web</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

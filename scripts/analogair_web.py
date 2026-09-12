@@ -779,6 +779,37 @@ async def ensure_owntone_playing():
             print(f"[AnalogAir Web] ensure_owntone_playing: {e}", flush=True)
             return False
 
+async def purge_owntone_buffer(request):
+    """
+    Clears the accumulated 30s FIFO pipe and receiver delay by restarting the
+    audio capture service and OwnTone service via passwordless sudo.
+    Restores active output playback instantly with real-time needle audio.
+    """
+    print("[AnalogAir Web] Purge buffer requested. Restarting audio pipeline...", flush=True)
+    loop = asyncio.get_event_loop()
+    
+    def _restart_pipeline():
+        try:
+            # 1. Restart user audio capture (kills stale ffmpeg/parec process)
+            subprocess.run(["systemctl", "--user", "restart", "analogair-capture.service"], timeout=5)
+        except Exception as e:
+            print(f"[AnalogAir Web] Error restarting capture: {e}", flush=True)
+        try:
+            # 2. Restart OwnTone system service to dump stale HTTP/mDNS buffer queues
+            subprocess.run(["sudo", "systemctl", "restart", "owntone.service"], timeout=8)
+        except Exception as e:
+            print(f"[AnalogAir Web] Error restarting owntone: {e}", flush=True)
+
+    await loop.run_in_executor(None, _restart_pipeline)
+
+    # Allow OwnTone 1.5s to rebind sockets, then ensure playback resumes
+    async def _post_restart_resume():
+        await asyncio.sleep(1.8)
+        await ensure_owntone_playing()
+
+    asyncio.create_task(_post_restart_resume())
+    return web.json_response({"success": True, "message": "Stream restarted in real-time."})
+
 async def start_owntone_player(request):
     await ensure_owntone_playing()
     return web.json_response({"success": True})
@@ -1469,6 +1500,7 @@ def main():
     app.router.add_post('/api/owntone/outputs/{id}/volume', set_owntone_output_volume)
     app.router.add_post('/api/owntone/outputs/{id}/favorite', toggle_favorite_output)
     app.router.add_post('/api/owntone/player/play', start_owntone_player)
+    app.router.add_post('/api/owntone/purge-buffer', purge_owntone_buffer)
 
     # 4. Search & Overrides
     app.router.add_get('/api/search/musicbrainz', search_musicbrainz)

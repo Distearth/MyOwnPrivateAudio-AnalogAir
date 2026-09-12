@@ -555,9 +555,9 @@ SERVEOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now listen-for-shutdown.service 2>/dev/null || true
 
-# 4. Passwordless sudo permissions for clean shutdown and reboot commands
+# 4. Passwordless sudo permissions for clean shutdown, reboot, and owntone service restart
 cat << SUDOEOF | sudo tee /etc/sudoers.d/analogair-power >/dev/null
-$CONF_USER ALL=(ALL) NOPASSWD: /bin/systemctl poweroff, /bin/systemctl reboot, /sbin/shutdown, /sbin/poweroff, /sbin/reboot
+$CONF_USER ALL=(ALL) NOPASSWD: /bin/systemctl poweroff, /bin/systemctl reboot, /bin/systemctl restart owntone, /bin/systemctl restart owntone.service, /sbin/shutdown, /sbin/poweroff, /sbin/reboot
 SUDOEOF
 sudo chmod 0440 /etc/sudoers.d/analogair-power
 

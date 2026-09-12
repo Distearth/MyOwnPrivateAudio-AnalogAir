@@ -308,6 +308,17 @@ export default function App() {
     await safeJsonFetch(`/api/sessions/${id}`, { method: 'DELETE' });
   };
 
+  // Purge 30-second audio backlog by restarting OwnTone and audio capture pipe
+  const handlePurgeBuffer = async () => {
+    recordActivity(); // Wake from blackout / OLED dimmer state
+    await safeJsonFetch('/api/owntone/purge-buffer', { method: 'POST' });
+    // Refresh outputs and state
+    setTimeout(() => {
+      fetchOutputs();
+      fetchState();
+    }, 1500);
+  };
+
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden font-sans text-neutral-100">
       {/* 1. Fullscreen Touchscreen Now Playing View */}
@@ -316,6 +327,8 @@ export default function App() {
         settings={settings}
         onOpenControls={() => setIsControlsOpen(true)}
         onOpenEditMetadata={() => setIsMetadataEditorOpen(true)}
+        onPurgeBuffer={handlePurgeBuffer}
+        onWakeScreen={recordActivity}
       />
 
       {/* 2. Slide-up Touchscreen Controls Overlay */}
@@ -335,6 +348,7 @@ export default function App() {
         onOpenEditMetadata={() => setIsMetadataEditorOpen(true)}
         onUpdateSettings={handleUpdateSettings}
         onDeleteSession={handleDeleteSession}
+        onPurgeBuffer={handlePurgeBuffer}
       />
 
       {/* 3. Metadata & Cover Art Override Modal */}

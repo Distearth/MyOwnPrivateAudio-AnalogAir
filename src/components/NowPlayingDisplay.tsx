@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Disc, Music, Sliders, Radio, Sparkles, CheckCircle2, CassetteTape, Disc3, Mic2, Maximize2, Minimize2 } from 'lucide-react';
+import { Disc, Music, Sliders, Radio, Sparkles, CheckCircle2, CassetteTape, Disc3, Mic2, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
 import { NowPlayingState, SystemPreferences } from '../types';
 import { sanitizeAlbumTitle, sanitizeTrackTitle } from '../utils/sanitize';
 import vinylDefaultArt from '../assets/images/analogair_idle_art_1788723997443.jpg';
@@ -11,19 +11,25 @@ interface NowPlayingDisplayProps {
   settings?: SystemPreferences;
   onOpenControls: () => void;
   onOpenEditMetadata: () => void;
+  onPurgeBuffer?: () => Promise<void> | void;
+  onWakeScreen?: () => void;
 }
 
 export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
   state,
   settings,
   onOpenControls,
-  onOpenEditMetadata
+  onOpenEditMetadata,
+  onPurgeBuffer,
+  onWakeScreen
 }) => {
   const [imageError, setImageError] = useState(false);
   const [useLocalFallback, setUseLocalFallback] = useState(false);
   const [fallbackLevel, setFallbackLevel] = useState<number>(0);
   const [isFaded, setIsFaded] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isPurging, setIsPurging] = useState(false);
+  const [purgeFeedback, setPurgeFeedback] = useState<string | null>(null);
   const isIdle = state.status === 'idle';
 
   // Monitor document fullscreen status
@@ -290,6 +296,47 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
               <span>Album Side Lock Active</span>
             </span>
           )}
+
+          {/* Purge Buffer & Resync Stream quick-action button */}
+          <button
+            id="purge-buffer-btn"
+            onClick={async (e) => {
+              e.stopPropagation();
+              if (onWakeScreen) onWakeScreen();
+              if (isPurging) return;
+              setIsPurging(true);
+              setPurgeFeedback('Purging buffers...');
+              try {
+                if (onPurgeBuffer) {
+                  await onPurgeBuffer();
+                }
+                setPurgeFeedback('Stream Resynced');
+                setTimeout(() => setPurgeFeedback(null), 3000);
+              } catch {
+                setPurgeFeedback('Purge Failed');
+                setTimeout(() => setPurgeFeedback(null), 3000);
+              } finally {
+                setIsPurging(false);
+              }
+            }}
+            disabled={isPurging}
+            title="Purge 30s pipe & receiver delay, restarting stream in real-time"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border transition-all text-xs font-sans font-medium shadow-lg active:scale-95 ${
+              isPurging 
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 cursor-wait' 
+                : purgeFeedback
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                : 'bg-neutral-800/90 hover:bg-neutral-700 text-neutral-200 hover:text-white border-neutral-700/80'
+            }`}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-amber-400 ${isPurging ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">
+              {purgeFeedback || (isPurging ? 'Purging...' : 'Purge Buffer')}
+            </span>
+            <span className="sm:hidden">
+              {purgeFeedback ? 'Synced' : isPurging ? '...' : 'Purge'}
+            </span>
+          </button>
 
           {/* Controls button */}
           <button

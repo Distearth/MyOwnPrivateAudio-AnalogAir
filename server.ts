@@ -738,6 +738,11 @@ app.post('/api/owntone/player/play', (req, res) => {
   res.json({ success: true, state: 'play' });
 });
 
+// Purge audio backlog and resync stream
+app.post('/api/owntone/purge-buffer', (req, res) => {
+  res.json({ success: true, message: 'Audio backlog cleared and stream restarted.' });
+});
+
 app.post('/api/owntone/outputs/:id/volume', (req, res) => {
   const id = req.params.id;
   const { volume } = req.body;

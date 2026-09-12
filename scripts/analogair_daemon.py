@@ -400,6 +400,42 @@ def check_owntone_playing():
         pass
     return False
 
+def get_owntone_player_info():
+    """Returns player state and whether any speaker outputs are selected."""
+    player_state = "stop"
+    has_active_speakers = False
+    try:
+        r_p = requests.get("http://127.0.0.1:3689/api/player", timeout=1)
+        if r_p.status_code == 200:
+            player_state = r_p.json().get("state", "stop")
+    except Exception:
+        pass
+
+    try:
+        r_o = requests.get("http://127.0.0.1:3689/api/outputs", timeout=1)
+        if r_o.status_code == 200:
+            outputs = r_o.json().get("outputs", [])
+            has_active_speakers = any(o.get("selected", False) for o in outputs)
+    except Exception:
+        pass
+
+    return player_state, has_active_speakers
+
+def purge_pipeline_and_restart_owntone():
+    """
+    Purges stale 30s FIFO pipe backlog and clears audio queues by restarting
+    the user capture service and OwnTone system service.
+    """
+    print("[AnalogAir] Purging audio buffer and restarting stream in real-time...", flush=True)
+    try:
+        subprocess.run(["systemctl", "--user", "restart", "analogair-capture.service"], timeout=5)
+    except Exception as e:
+        print(f"[AnalogAir] Capture restart error: {e}", flush=True)
+    try:
+        subprocess.run(["sudo", "systemctl", "restart", "owntone.service"], timeout=8)
+    except Exception as e:
+        print(f"[AnalogAir] OwnTone restart error: {e}", flush=True)
+
 def set_owntone_player(state="play"):
     """Starts or pauses OwnTone player."""
     try:
@@ -670,10 +706,25 @@ async def main():
                 except Exception:
                     pass
         else:
+            # Signal detected (music playing)
+            was_silent_session = not is_playing or silence_counter >= max_silence_counts
             silence_counter = 0
+
             if not is_playing:
                 is_playing = True
                 print(f"[AnalogAir] Needle drop detected! (RMS: {rms:.5f} >= {silence_thresh:.5f})", flush=True)
+
+                # Check if OwnTone was stopped/paused or disconnected during silence
+                ot_state, has_speakers = get_owntone_player_info()
+                print(f"[AnalogAir] Current OwnTone status on needle drop: state='{ot_state}', active_speakers={has_speakers}", flush=True)
+
+                # If OwnTone stopped due to speaker disconnect or was idle, purge stale FIFO queue and restart
+                if was_silent_session and (ot_state != "play" or not has_speakers):
+                    print("[AnalogAir] OwnTone was not actively streaming during silence period. Purging 30s buffer backlog to ensure near-instant real-time playback...", flush=True)
+                    purge_pipeline_and_restart_owntone()
+                    time.sleep(1.8)
+                
+                # Start or resume OwnTone stream
                 set_owntone_player("play")
 
             # Check if Recognition is Disabled (No Recognition / Resource Saver Mode)
