@@ -814,6 +814,39 @@ async def start_owntone_player(request):
     await ensure_owntone_playing()
     return web.json_response({"success": True})
 
+async def stream_owntone_mp3(request):
+    """Proxies the live OwnTone MP3 stream directly through AnalogAir web."""
+    try:
+        session = aiohttp.ClientSession()
+        resp = await session.get(f"{OWNTONE_BASE}/stream.mp3", timeout=aiohttp.ClientTimeout(total=None, sock_connect=3))
+        if resp.status != 200:
+            await resp.release()
+            await session.close()
+            return web.Response(status=resp.status, text="OwnTone stream offline")
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                'Content-Type': 'audio/mpeg',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*'
+            }
+        )
+        await response.prepare(request)
+
+        try:
+            async for chunk in resp.content.iter_chunked(8192):
+                await response.write(chunk)
+        except (asyncio.CancelledError, ConnectionResetError):
+            pass
+        finally:
+            await resp.release()
+            await session.close()
+        return response
+    except Exception as e:
+        return web.Response(status=503, text=f"Stream error: {e}")
+
 async def toggle_owntone_output(request):
     output_id = request.match_info["id"]
     async with aiohttp.ClientSession() as session:
@@ -1501,6 +1534,8 @@ def main():
     app.router.add_post('/api/owntone/outputs/{id}/favorite', toggle_favorite_output)
     app.router.add_post('/api/owntone/player/play', start_owntone_player)
     app.router.add_post('/api/owntone/purge-buffer', purge_owntone_buffer)
+    app.router.add_get('/stream.mp3', stream_owntone_mp3)
+    app.router.add_get('/api/stream.mp3', stream_owntone_mp3)
 
     # 4. Search & Overrides
     app.router.add_get('/api/search/musicbrainz', search_musicbrainz)

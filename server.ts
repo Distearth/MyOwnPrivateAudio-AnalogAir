@@ -743,6 +743,28 @@ app.post('/api/owntone/purge-buffer', (req, res) => {
   res.json({ success: true, message: 'Audio backlog cleared and stream restarted.' });
 });
 
+// Proxy route for background live audio stream
+app.get(['/stream.mp3', '/api/stream.mp3'], (req, res) => {
+  const http = require('http');
+  const proxyReq = http.request('http://127.0.0.1:3689/stream.mp3', (proxyRes: any) => {
+    res.writeHead(proxyRes.statusCode || 200, {
+      'Content-Type': 'audio/mpeg',
+      'Cache-Control': 'no-cache, no-store',
+      'Access-Control-Allow-Origin': '*'
+    });
+    proxyRes.pipe(res);
+  });
+  proxyReq.on('error', () => {
+    if (!res.headersSent) {
+      res.status(503).json({ error: 'OwnTone stream offline' });
+    }
+  });
+  req.on('close', () => {
+    proxyReq.destroy();
+  });
+  proxyReq.end();
+});
+
 app.post('/api/owntone/outputs/:id/volume', (req, res) => {
   const id = req.params.id;
   const { volume } = req.body;

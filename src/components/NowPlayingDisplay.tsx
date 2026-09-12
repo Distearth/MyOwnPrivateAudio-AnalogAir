@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Disc, Music, Sliders, Radio, Sparkles, CheckCircle2, CassetteTape, Disc3, Mic2, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Disc, Music, Sliders, Radio, Sparkles, CheckCircle2, CassetteTape, Disc3, Mic2, Maximize2, Minimize2, RefreshCw, Volume2, VolumeX, Square, Loader2 } from 'lucide-react';
 import { NowPlayingState, SystemPreferences } from '../types';
 import { sanitizeAlbumTitle, sanitizeTrackTitle } from '../utils/sanitize';
 import vinylDefaultArt from '../assets/images/analogair_idle_art_1788723997443.jpg';
@@ -30,7 +30,101 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPurging, setIsPurging] = useState(false);
   const [purgeFeedback, setPurgeFeedback] = useState<string | null>(null);
+  const [isStreamingAudio, setIsStreamingAudio] = useState(false);
+  const [isStreamConnecting, setIsStreamConnecting] = useState(false);
+  const [streamAudioError, setStreamAudioError] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const isIdle = state.status === 'idle';
+
+  // Clean up browser audio element on unmount
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.removeAttribute('src');
+        audioRef.current.load();
+        audioRef.current = null;
+      }
+    };
+  }, []);
+
+  const toggleStreamPlayback = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onWakeScreen) onWakeScreen();
+
+    if (isStreamingAudio || isStreamConnecting) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.removeAttribute('src');
+        audioRef.current.load();
+        audioRef.current = null;
+      }
+      setIsStreamingAudio(false);
+      setIsStreamConnecting(false);
+      setStreamAudioError(null);
+    } else {
+      setIsStreamConnecting(true);
+      setStreamAudioError(null);
+
+      // Primary stream endpoint: http://analogair.local:3689/stream.mp3
+      // Uses the active network hostname if accessing via IP or local domain
+      const host = (typeof window !== 'undefined' && window.location.hostname && !window.location.hostname.includes('run.app') && window.location.hostname !== 'localhost')
+        ? window.location.hostname
+        : 'analogair.local';
+      const directUrl = `http://${host}:3689/stream.mp3`;
+      const fallbackUrl = '/stream.mp3';
+
+      const audio = new Audio();
+      audioRef.current = audio;
+
+      let started = false;
+      const onPlaying = () => {
+        started = true;
+        setIsStreamConnecting(false);
+        setIsStreamingAudio(true);
+        setStreamAudioError(null);
+      };
+
+      const onError = () => {
+        if (!started && audio.src.includes(':3689')) {
+          audio.src = `${fallbackUrl}?t=${Date.now()}`;
+          audio.play().catch(() => {
+            setIsStreamConnecting(false);
+            setIsStreamingAudio(false);
+            setStreamAudioError('Stream Offline');
+            setTimeout(() => setStreamAudioError(null), 4000);
+          });
+          return;
+        }
+        setIsStreamConnecting(false);
+        setIsStreamingAudio(false);
+        setStreamAudioError('Stream Error');
+        setTimeout(() => setStreamAudioError(null), 4000);
+      };
+
+      audio.addEventListener('playing', onPlaying);
+      audio.addEventListener('error', onError);
+
+      // Cache-busting query parameter avoids playing stale audio buffers
+      audio.src = `${directUrl}?t=${Date.now()}`;
+      audio.play().catch(() => {
+        if (audio.src.includes(':3689')) {
+          audio.src = `${fallbackUrl}?t=${Date.now()}`;
+          audio.play().catch(() => {
+            setIsStreamConnecting(false);
+            setIsStreamingAudio(false);
+            setStreamAudioError('Playback Blocked');
+            setTimeout(() => setStreamAudioError(null), 4000);
+          });
+        } else {
+          setIsStreamConnecting(false);
+          setIsStreamingAudio(false);
+          setStreamAudioError('Playback Blocked');
+          setTimeout(() => setStreamAudioError(null), 4000);
+        }
+      });
+    }
+  };
 
   // Monitor document fullscreen status
   useEffect(() => {
@@ -537,6 +631,61 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
           <span>Tap anywhere on screen for controls & speakers</span>
         </div>
       </footer>
+
+      {/* ONE-BUTTON LIVE BACKGROUND STREAM PLAYER (Bottom Right on Screen) */}
+      <div
+        className={`fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-30 flex items-center transition-all duration-500 ${
+          isFaded && !isStreamingAudio ? 'opacity-40 hover:opacity-100' : 'opacity-100'
+        }`}
+      >
+        <button
+          id="toggle-stream-btn"
+          onClick={toggleStreamPlayback}
+          title={
+            isStreamingAudio
+              ? "Stop live browser audio stream"
+              : "Listen live in this browser (http://analogair.local:3689/stream.mp3)"
+          }
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-full border text-xs font-sans font-semibold tracking-wide transition-all shadow-xl active:scale-95 select-none ${
+            isStreamingAudio
+              ? 'bg-emerald-950/80 hover:bg-emerald-900/90 text-emerald-300 border-emerald-500/60 shadow-[0_0_20px_rgba(16,185,129,0.35)] ring-1 ring-emerald-500/30'
+              : isStreamConnecting
+              ? 'bg-amber-950/80 text-amber-300 border-amber-500/50 cursor-wait ring-1 ring-amber-500/30'
+              : streamAudioError
+              ? 'bg-rose-950/80 text-rose-300 border-rose-500/50'
+              : 'bg-neutral-900/90 hover:bg-neutral-800/95 text-neutral-200 hover:text-white border-neutral-700/90 backdrop-blur-md'
+          }`}
+        >
+          {isStreamingAudio ? (
+            <>
+              {/* Mini animated equalizer bars */}
+              <span className="flex items-end gap-0.5 h-3.5 py-0.5">
+                <span className="w-0.5 bg-emerald-400 rounded-full h-2 animate-pulse" />
+                <span className="w-0.5 bg-emerald-400 rounded-full h-3.5 animate-pulse" style={{ animationDelay: '150ms' }} />
+                <span className="w-0.5 bg-emerald-400 rounded-full h-1.5 animate-pulse" style={{ animationDelay: '300ms' }} />
+                <span className="w-0.5 bg-emerald-400 rounded-full h-3 animate-pulse" style={{ animationDelay: '450ms' }} />
+              </span>
+              <span>Stop Stream</span>
+              <Square className="w-2.5 h-2.5 fill-emerald-400 text-emerald-400 ml-0.5" />
+            </>
+          ) : isStreamConnecting ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+              <span>Connecting...</span>
+            </>
+          ) : streamAudioError ? (
+            <>
+              <VolumeX className="w-3.5 h-3.5 text-rose-400" />
+              <span>{streamAudioError}</span>
+            </>
+          ) : (
+            <>
+              <Volume2 className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" />
+              <span>Listen Live</span>
+            </>
+          )}
+        </button>
+      </div>
     </div>
   );
 };
