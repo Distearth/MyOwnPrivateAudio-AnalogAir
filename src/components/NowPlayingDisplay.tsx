@@ -48,7 +48,7 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
     };
   }, []);
 
-  const toggleStreamPlayback = (e: React.MouseEvent) => {
+  const toggleStreamPlayback = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onWakeScreen) onWakeScreen();
 
@@ -65,6 +65,17 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
     } else {
       setIsStreamConnecting(true);
       setStreamAudioError(null);
+
+      // Make sure OwnTone is in the play state (or toggle it to play)
+      try {
+        await fetch('/api/owntone/player/play', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'play' })
+        });
+      } catch (err) {
+        console.warn('[AnalogAir] Failed to trigger OwnTone play state:', err);
+      }
 
       // Primary stream endpoint: http://analogair.local:3689/stream.mp3
       // Uses the active network hostname if accessing via IP or local domain

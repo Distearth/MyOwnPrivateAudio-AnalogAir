@@ -991,9 +991,67 @@ app.post('/api/owntone/outputs/:id/toggle', (req, res) => {
   res.json({ success: true, output: out, playbackEnsured: out.selected });
 });
 
+// OwnTone player state and playback control
+app.get('/api/owntone/player', (req, res) => {
+  const http = require('http');
+  const proxyReq = http.request({
+    hostname: '127.0.0.1',
+    port: 3689,
+    path: '/api/player',
+    method: 'GET',
+    timeout: 1500
+  }, (proxyRes: any) => {
+    let body = '';
+    proxyRes.on('data', (d: any) => { body += d; });
+    proxyRes.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        res.json({ success: true, state: data.state || 'play', data });
+      } catch {
+        res.json({ success: true, state: 'play' });
+      }
+    });
+  });
+  proxyReq.on('error', () => {
+    res.json({ success: true, state: 'play' });
+  });
+  proxyReq.end();
+});
+
 // Start/ensure OwnTone stream playback from pipe
 app.post('/api/owntone/player/play', (req, res) => {
-  res.json({ success: true, state: 'play' });
+  const http = require('http');
+  const proxyReq = http.request({
+    hostname: '127.0.0.1',
+    port: 3689,
+    path: '/api/player/play',
+    method: 'PUT',
+    timeout: 1500
+  }, () => {
+    res.json({ success: true, state: 'play' });
+  });
+  proxyReq.on('error', () => {
+    res.json({ success: true, state: 'play' });
+  });
+  proxyReq.end();
+});
+
+// Toggle OwnTone player playback
+app.post('/api/owntone/player/toggle', (req, res) => {
+  const http = require('http');
+  const proxyReq = http.request({
+    hostname: '127.0.0.1',
+    port: 3689,
+    path: '/api/player/toggle',
+    method: 'PUT',
+    timeout: 1500
+  }, () => {
+    res.json({ success: true });
+  });
+  proxyReq.on('error', () => {
+    res.json({ success: true, state: 'play' });
+  });
+  proxyReq.end();
 });
 
 // Purge audio backlog and resync stream

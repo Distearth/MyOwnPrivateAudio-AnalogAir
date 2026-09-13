@@ -735,22 +735,32 @@ async def ensure_owntone_playing():
             if player_state == "play":
                 return True
 
-            # 2. Try starting playback via PUT /api/player/play and POST /api/player/play
+            # 2. If paused, try resume/play via PUT /api/player/play or toggle
+            if player_state == "pause":
+                for path in ("/api/player/play", "/api/player/toggle"):
+                    try:
+                        async with session.put(f"{OWNTONE_BASE}{path}", timeout=2) as r_pause:
+                            if r_pause.status in (200, 204):
+                                return True
+                    except Exception:
+                        pass
+
+            # 3. Try starting playback via PUT /api/player/play and POST /api/player/play
             for method in (session.put, session.post):
                 try:
                     async with method(f"{OWNTONE_BASE}/api/player/play", timeout=2) as r_play:
-                        if r_play.status == 200:
+                        if r_play.status in (200, 204):
                             break
                 except Exception:
                     pass
 
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.2)
             async with session.get(f"{OWNTONE_BASE}/api/player", timeout=2) as r2:
                 if r2.status == 200:
                     if (await r2.json()).get("state") == "play":
                         return True
 
-            # 3. If still not playing, try adding the AnalogAir pipe track to the queue and starting playback
+            # 4. If still not playing, try adding the AnalogAir pipe track to the queue and starting playback
             for expr in (
                 'path contains "AnalogAir"',
                 'title contains "AnalogAir"',
@@ -828,13 +838,53 @@ async def purge_owntone_buffer(request):
     asyncio.create_task(_post_restart_resume())
     return web.json_response({"success": True, "message": "Stream restarted in real-time."})
 
+async def get_owntone_player(request):
+    """Returns current OwnTone player state."""
+    state = "unknown"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{OWNTONE_BASE}/api/player", timeout=2) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    state = data.get("state", "unknown")
+                    return web.json_response({"success": True, "state": state, "data": data})
+    except Exception:
+        pass
+    return web.json_response({"success": False, "state": state})
+
 async def start_owntone_player(request):
-    await ensure_owntone_playing()
-    return web.json_response({"success": True})
+    """Ensures OwnTone is in the play state, or toggles it to play."""
+    action = "play"
+    try:
+        if request.can_read_body:
+            body = await request.json()
+            action = body.get("action", "play")
+    except Exception:
+        pass
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            curr_state = None
+            async with session.get(f"{OWNTONE_BASE}/api/player", timeout=2) as r:
+                if r.status == 200:
+                    curr_state = (await r.json()).get("state")
+            
+            if action == "toggle" and curr_state == "play":
+                async with session.put(f"{OWNTONE_BASE}/api/player/pause", timeout=2):
+                    return web.json_response({"success": True, "state": "pause"})
+            else:
+                await ensure_owntone_playing()
+                return web.json_response({"success": True, "state": "play"})
+        except Exception:
+            await ensure_owntone_playing()
+            return web.json_response({"success": True, "state": "play"})
 
 async def stream_owntone_mp3(request):
     """Proxies the live OwnTone MP3 stream directly through AnalogAir web."""
     try:
+        # Automatically make sure OwnTone is in the play state
+        await ensure_owntone_playing()
+
         session = aiohttp.ClientSession()
         resp = await session.get(f"{OWNTONE_BASE}/stream.mp3", timeout=aiohttp.ClientTimeout(total=None, sock_connect=3))
         if resp.status != 200:
@@ -1772,7 +1822,9 @@ def main():
     app.router.add_post('/api/owntone/outputs/{id}/toggle', toggle_owntone_output)
     app.router.add_post('/api/owntone/outputs/{id}/volume', set_owntone_output_volume)
     app.router.add_post('/api/owntone/outputs/{id}/favorite', toggle_favorite_output)
+    app.router.add_get('/api/owntone/player', get_owntone_player)
     app.router.add_post('/api/owntone/player/play', start_owntone_player)
+    app.router.add_post('/api/owntone/player/toggle', start_owntone_player)
     app.router.add_post('/api/owntone/purge-buffer', purge_owntone_buffer)
     app.router.add_get('/stream.mp3', stream_owntone_mp3)
     app.router.add_get('/api/stream.mp3', stream_owntone_mp3)
