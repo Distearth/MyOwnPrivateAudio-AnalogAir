@@ -460,6 +460,84 @@ systemctl --user enable --now analogair-web.service
 # Enable lingering so user services keep running on headless boot
 sudo loginctl enable-linger "$CONF_USER"
 
+# 8b. Install Pre-Shutdown Network Killer & Receiver Protection
+# Immediately terminates OwnTone and severs all network links prior to shutdown or reboot,
+# preventing OwnTone from reconnecting or triggering AVR receivers to switch active inputs.
+echo ""
+echo -e "${{YELLOW}}[Safety] Installing Pre-Shutdown Network Killer (/usr/local/bin/analogair-pre-shutdown.sh)...${{NC}}"
+
+cat << 'SHUTDOWNEOF' | sudo tee /usr/local/bin/analogair-pre-shutdown.sh >/dev/null
+#!/bin/bash
+# AnalogAir Pre-Shutdown: Kill network connections and stop OwnTone before shutdown/reboot
+# Prevents OwnTone from reconnecting to AirPlay speakers or waking/switching AVR receiver inputs.
+
+PIDFILE="/tmp/analogair-pre-shutdown.pid"
+if [ -f "$PIDFILE" ]; then
+    exit 0
+fi
+touch "$PIDFILE" 2>/dev/null || true
+
+echo "[AnalogAir] Pre-shutdown: Terminating OwnTone and severing all network links..."
+
+# 1. Terminate OwnTone immediately so no AirPlay keep-alives or teardowns are transmitted
+systemctl stop owntone.service 2>/dev/null || true
+systemctl stop owntone 2>/dev/null || true
+pkill -9 owntone 2>/dev/null || true
+
+# 2. Stop Avahi (mDNS / Bonjour) to halt network speaker announcements
+systemctl stop avahi-daemon.service 2>/dev/null || true
+systemctl stop avahi-daemon 2>/dev/null || true
+pkill -9 avahi-daemon 2>/dev/null || true
+
+# 3. Drop all non-loopback outbound traffic via iptables immediately
+iptables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true
+iptables -I OUTPUT 2 -j DROP 2>/dev/null || true
+ip6tables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true
+ip6tables -I OUTPUT 2 -j DROP 2>/dev/null || true
+
+# 4. Bring down all physical and wireless network interfaces (Ethernet & Wi-Fi)
+for dev_path in /sys/class/net/*; do
+    [ -e "$dev_path" ] || continue
+    dev=$(basename "$dev_path")
+    if [ "$dev" != "lo" ]; then
+        ip link set "$dev" down 2>/dev/null || true
+    fi
+done
+
+# 5. Stop NetworkManager and wireless supplicants
+systemctl stop NetworkManager 2>/dev/null || true
+systemctl stop wpa_supplicant 2>/dev/null || true
+
+exit 0
+SHUTDOWNEOF
+sudo chmod +x /usr/local/bin/analogair-pre-shutdown.sh
+
+# Install systemd pre-shutdown service unit
+cat << 'SERVEOF' | sudo tee /etc/systemd/system/analogair-pre-shutdown.service >/dev/null
+[Unit]
+Description=AnalogAir Pre-Shutdown Network Killer & Receiver Protection
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target poweroff.target final.target owntone.service
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/analogair-pre-shutdown.sh
+TimeoutStartSec=5
+
+[Install]
+WantedBy=shutdown.target reboot.target halt.target poweroff.target
+SERVEOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable analogair-pre-shutdown.service 2>/dev/null || true
+
+# Also hook into systemd system-shutdown directory for final-stage guarantee
+sudo mkdir -p /lib/systemd/system-shutdown /usr/lib/systemd/system-shutdown 2>/dev/null || true
+sudo cp -f /usr/local/bin/analogair-pre-shutdown.sh /lib/systemd/system-shutdown/analogair-kill-network 2>/dev/null || true
+sudo cp -f /usr/local/bin/analogair-pre-shutdown.sh /usr/lib/systemd/system-shutdown/analogair-kill-network 2>/dev/null || true
+sudo chmod +x /lib/systemd/system-shutdown/analogair-kill-network /usr/lib/systemd/system-shutdown/analogair-kill-network 2>/dev/null || true
+
 # 9. Configure Hardware Power Switch (Physical Pins 5 & 6 / GPIO 3 + GND)
 # Using Howchoo pi-power-button method (https://github.com/Howchoo/pi-power-button)
 echo ""
@@ -501,6 +579,10 @@ import subprocess
 import sys
 
 def do_shutdown():
+    try:
+        subprocess.call(['/usr/local/bin/analogair-pre-shutdown.sh'])
+    except Exception:
+        pass
     subprocess.call(['shutdown', '-h', 'now'])
     sys.exit(0)
 
@@ -555,9 +637,9 @@ SERVEOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now listen-for-shutdown.service 2>/dev/null || true
 
-# 4. Passwordless sudo permissions for clean shutdown, reboot, and owntone service restart
+# 4. Passwordless sudo permissions for clean shutdown, reboot, owntone service, and pre-shutdown script
 cat << SUDOEOF | sudo tee /etc/sudoers.d/analogair-power >/dev/null
-$CONF_USER ALL=(ALL) NOPASSWD: /bin/systemctl poweroff, /bin/systemctl reboot, /bin/systemctl restart owntone, /bin/systemctl restart owntone.service, /sbin/shutdown, /sbin/poweroff, /sbin/reboot
+$CONF_USER ALL=(ALL) NOPASSWD: /bin/systemctl poweroff, /bin/systemctl reboot, /bin/systemctl restart owntone, /bin/systemctl restart owntone.service, /bin/systemctl stop owntone, /bin/systemctl stop owntone.service, /sbin/shutdown, /sbin/poweroff, /sbin/reboot, /usr/local/bin/analogair-pre-shutdown.sh
 SUDOEOF
 sudo chmod 0440 /etc/sudoers.d/analogair-power
 

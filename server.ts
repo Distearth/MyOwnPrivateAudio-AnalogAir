@@ -1171,12 +1171,25 @@ app.post('/api/settings', (req, res) => {
 // System Power Management (Pins 5 & 6 / Immediate Shutdown & Reboot)
 app.post('/api/system/power', (req, res) => {
   const { action } = req.body || {};
-  if (action === 'shutdown') {
-    console.log('[AnalogAir] Immediate shutdown requested. Halting system cleanly...');
-    res.json({ success: true, message: 'System shutdown initiated.' });
-  } else if (action === 'reboot') {
-    console.log('[AnalogAir] Reboot requested. Restarting system cleanly...');
-    res.json({ success: true, message: 'System reboot initiated.' });
+  if (action === 'shutdown' || action === 'reboot') {
+    console.log(`[AnalogAir] ${action === 'shutdown' ? 'Immediate shutdown' : 'Reboot'} requested. Killing network connections and halting cleanly...`);
+
+    setTimeout(() => {
+      const { exec } = require('child_process');
+      const preShutdownCmd = 'sudo /usr/local/bin/analogair-pre-shutdown.sh 2>/dev/null || (sudo pkill -9 owntone 2>/dev/null; sudo pkill -9 avahi-daemon 2>/dev/null; for dev in /sys/class/net/*; do d=$(basename $dev); [ "$d" != "lo" ] && sudo ip link set $d down 2>/dev/null; done)';
+      exec(preShutdownCmd, () => {
+        if (action === 'shutdown') {
+          exec('sudo systemctl poweroff 2>/dev/null || sudo shutdown -h now 2>/dev/null');
+        } else {
+          exec('sudo systemctl reboot 2>/dev/null || sudo reboot 2>/dev/null');
+        }
+      });
+    }, 400);
+
+    res.json({
+      success: true,
+      message: `System ${action} initiated. Network connections killed to prevent speaker reactivation.`
+    });
   } else {
     res.status(400).json({ error: 'Invalid action' });
   }

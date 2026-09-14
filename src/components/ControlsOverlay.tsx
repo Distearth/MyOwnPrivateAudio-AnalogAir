@@ -1118,8 +1118,8 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                         </div>
                         <p className="text-[11px] text-neutral-400">
                           {showPowerConfirm === 'shutdown'
-                            ? 'All database sessions and audio streams will be cleanly stopped, and the Pi will power off.'
-                            : 'All services will restart and the Raspberry Pi will reboot in ~30 seconds.'}
+                            ? 'Network connections are instantly severed to prevent AirPlay receivers from waking/switching inputs, audio streams halt, and the Pi powers off.'
+                            : 'Network connections are severed to prevent receiver input switching, all services cleanly stop, and the Pi reboots.'}
                         </p>
                         <div className="flex items-center gap-2 pt-1">
                           <button

@@ -1572,19 +1572,50 @@ async def save_settings(request):
     return web.json_response({"success": True, "settings": data})
 
 # --- 7b. System Power Management ---
+async def _execute_clean_power(action: str):
+    await asyncio.sleep(0.3)
+    try:
+        # 1. Stop OwnTone playback immediately so it stops sending audio packets
+        async with aiohttp.ClientSession() as session:
+            try:
+                await session.put(f"{OWNTONE_BASE}/api/player/stop", timeout=aiohttp.ClientTimeout(total=1))
+            except Exception:
+                pass
+
+        # 2. Run dedicated pre-shutdown network killer script if present
+        pre_shutdown_script = Path("/usr/local/bin/analogair-pre-shutdown.sh")
+        if pre_shutdown_script.exists():
+            subprocess.run(["sudo", str(pre_shutdown_script)], timeout=4)
+        else:
+            # Inline fallback: kill OwnTone & Avahi, then bring down network interfaces
+            subprocess.run(["sudo", "pkill", "-9", "owntone"], timeout=2)
+            subprocess.run(["sudo", "pkill", "-9", "avahi-daemon"], timeout=2)
+            subprocess.run([
+                "sudo", "sh", "-c",
+                "for dev in /sys/class/net/*; do d=$(basename $dev); [ \"$d\" != \"lo\" ] && ip link set $d down 2>/dev/null; done"
+            ], timeout=2)
+    except Exception as e:
+        print(f"[AnalogAir Web] Pre-shutdown network kill error: {e}", flush=True)
+
+    # 3. Trigger clean poweroff or reboot
+    if action == "shutdown":
+        subprocess.Popen(["sudo", "systemctl", "poweroff"])
+    else:
+        subprocess.Popen(["sudo", "systemctl", "reboot"])
+
 async def handle_system_power(request):
     try:
         data = await request.json()
         action = data.get("action", "shutdown")
-        if action == "shutdown":
-            print("[AnalogAir Web] Immediate shutdown requested. Halting system cleanly...", flush=True)
-            subprocess.Popen(["sudo", "systemctl", "poweroff"])
-            return web.json_response({"success": True, "message": "System shutdown initiated."})
-        elif action == "reboot":
-            print("[AnalogAir Web] Reboot requested. Restarting system cleanly...", flush=True)
-            subprocess.Popen(["sudo", "systemctl", "reboot"])
-            return web.json_response({"success": True, "message": "System reboot initiated."})
-        return web.json_response({"error": "Invalid action"}, status=400)
+        if action not in ("shutdown", "reboot"):
+            return web.json_response({"error": "Invalid action"}, status=400)
+
+        print(f"[AnalogAir Web] Power action '{action}' requested. Killing network connections and halting cleanly...", flush=True)
+        asyncio.create_task(_execute_clean_power(action))
+        return web.json_response({
+            "success": True,
+            "message": f"System {action} initiated. Network connections killed to prevent speaker reactivation."
+        })
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
