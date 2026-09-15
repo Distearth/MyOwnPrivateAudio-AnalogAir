@@ -76,6 +76,7 @@ export default function App() {
   const [settings, setSettings] = useState<SystemPreferences>(defaultSettings);
 
   const [isControlsOpen, setIsControlsOpen] = useState(false);
+  const [controlsTab, setControlsTab] = useState<'quick' | 'tone' | 'speakers' | 'history' | 'update' | 'settings'>('quick');
   const [isMetadataEditorOpen, setIsMetadataEditorOpen] = useState(false);
   const [lastActivityTimestamp, setLastActivityTimestamp] = useState<number>(Date.now());
 
@@ -137,11 +138,24 @@ export default function App() {
   }, []);
 
   const fetchOutputs = useCallback(async () => {
-    const data = await safeJsonFetch<{ outputs?: OwnToneOutput[]; favoriteSpeakers?: string[] }>('/api/owntone/outputs');
+    const data = await safeJsonFetch<{
+      outputs?: OwnToneOutput[];
+      favoriteSpeakers?: string[];
+      autoConnectSpeakers?: string[];
+    }>('/api/owntone/outputs');
     if (data?.outputs) {
       const storedFavs: string[] = (() => {
         try {
           const raw = localStorage.getItem('analogair_favorite_speakers');
+          return raw ? JSON.parse(raw).map(String) : [];
+        } catch {
+          return [];
+        }
+      })();
+
+      const storedAutos: string[] = (() => {
+        try {
+          const raw = localStorage.getItem('analogair_autoconnect_speakers');
           return raw ? JSON.parse(raw).map(String) : [];
         } catch {
           return [];
@@ -155,14 +169,23 @@ export default function App() {
         } catch {}
       }
 
+      const serverAutos = Array.isArray(data.autoConnectSpeakers) ? data.autoConnectSpeakers.map(String) : null;
+      if (serverAutos) {
+        try {
+          localStorage.setItem('analogair_autoconnect_speakers', JSON.stringify(serverAutos));
+        } catch {}
+      }
+
       const activeFavs = serverFavs || storedFavs;
+      const activeAutos = serverAutos || storedAutos;
 
       setOutputs(data.outputs.map(o => {
         const sId = String(o.id);
         return {
           ...o,
           id: sId,
-          isFavorite: activeFavs.includes(sId) || Boolean(o.isFavorite)
+          isFavorite: activeFavs.includes(sId) || Boolean(o.isFavorite),
+          autoConnect: activeAutos.includes(sId) || Boolean(o.autoConnect)
         };
       }));
     }
@@ -284,6 +307,34 @@ export default function App() {
     }
   };
 
+  const handleToggleAutoConnectOutput = async (id: string) => {
+    const stringId = String(id);
+    setOutputs(prev => {
+      const updated = prev.map(o => String(o.id) === stringId ? { ...o, autoConnect: !o.autoConnect } : o);
+      try {
+        const autoIds = updated.filter(o => o.autoConnect).map(o => String(o.id));
+        localStorage.setItem('analogair_autoconnect_speakers', JSON.stringify(autoIds));
+      } catch {
+        // ignore storage errors
+      }
+      return updated;
+    });
+    const res = await safeJsonFetch<{ success?: boolean; autoConnect?: boolean; autoConnectSpeakers?: string[] }>(
+      `/api/owntone/outputs/${stringId}/autoconnect`,
+      { method: 'POST' }
+    );
+    if (res?.autoConnectSpeakers && Array.isArray(res.autoConnectSpeakers)) {
+      const serverAutos = res.autoConnectSpeakers.map(String);
+      try {
+        localStorage.setItem('analogair_autoconnect_speakers', JSON.stringify(serverAutos));
+      } catch {}
+      setOutputs(prev => prev.map(o => ({
+        ...o,
+        autoConnect: serverAutos.includes(String(o.id))
+      })));
+    }
+  };
+
   const handleToggleMode = async (continuous: boolean) => {
     setState(prev => ({ ...prev, isContinuous: continuous }));
     await safeJsonFetch('/api/mode', {
@@ -325,7 +376,14 @@ export default function App() {
       <NowPlayingDisplay
         state={state}
         settings={settings}
-        onOpenControls={() => setIsControlsOpen(true)}
+        onOpenControls={() => {
+          setControlsTab('quick');
+          setIsControlsOpen(true);
+        }}
+        onOpenSpeakers={() => {
+          setControlsTab('speakers');
+          setIsControlsOpen(true);
+        }}
         onOpenEditMetadata={() => setIsMetadataEditorOpen(true)}
         onPurgeBuffer={handlePurgeBuffer}
         onWakeScreen={recordActivity}
@@ -335,6 +393,8 @@ export default function App() {
       <ControlsOverlay
         isOpen={isControlsOpen}
         onClose={() => setIsControlsOpen(false)}
+        initialTab={controlsTab}
+        onTabChange={setControlsTab}
         state={state}
         tone={tone}
         outputs={outputs}
@@ -344,6 +404,7 @@ export default function App() {
         onToggleOutput={handleToggleOutput}
         onUpdateOutputVolume={handleUpdateOutputVolume}
         onToggleFavoriteOutput={handleToggleFavoriteOutput}
+        onToggleAutoConnectOutput={handleToggleAutoConnectOutput}
         onToggleMode={handleToggleMode}
         onOpenEditMetadata={() => setIsMetadataEditorOpen(true)}
         onUpdateSettings={handleUpdateSettings}

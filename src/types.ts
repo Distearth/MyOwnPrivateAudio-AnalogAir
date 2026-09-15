@@ -124,6 +124,7 @@ export interface OwnToneOutput {
   selected: boolean;
   volume: number;
   isFavorite?: boolean;
+  autoConnect?: boolean;
 }
 
 export interface SystemPreferences {

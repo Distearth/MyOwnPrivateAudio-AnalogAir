@@ -674,11 +674,18 @@ async def get_audio_level(request):
 # --- 3. OwnTone Multi-Room Speaker Outputs ---
 async def get_owntone_outputs(request):
     fav_ids = set()
+    auto_ids = set()
     with get_db() as conn:
         try:
             conn.execute("CREATE TABLE IF NOT EXISTS favorite_speakers (speaker_id TEXT PRIMARY KEY)")
             for row in conn.execute("SELECT speaker_id FROM favorite_speakers"):
                 fav_ids.add(str(row["speaker_id"]))
+        except Exception:
+            pass
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)")
+            for row in conn.execute("SELECT speaker_id FROM auto_connect_speakers"):
+                auto_ids.add(str(row["speaker_id"]))
         except Exception:
             pass
 
@@ -689,12 +696,22 @@ async def get_owntone_outputs(request):
                     data = await resp.json()
                     outputs = data.get("outputs", [])
                     for o in outputs:
-                        o["id"] = str(o.get("id"))
-                        o["isFavorite"] = str(o.get("id")) in fav_ids
-                    return web.json_response({"outputs": outputs, "favoriteSpeakers": list(fav_ids)})
+                        oid = str(o.get("id"))
+                        o["id"] = oid
+                        o["isFavorite"] = oid in fav_ids
+                        o["autoConnect"] = oid in auto_ids
+                    return web.json_response({
+                        "outputs": outputs,
+                        "favoriteSpeakers": list(fav_ids),
+                        "autoConnectSpeakers": list(auto_ids)
+                    })
         except Exception:
             pass
-    return web.json_response({"outputs": [], "favoriteSpeakers": list(fav_ids)})
+    return web.json_response({
+        "outputs": [],
+        "favoriteSpeakers": list(fav_ids),
+        "autoConnectSpeakers": list(auto_ids)
+    })
 
 async def toggle_favorite_output(request):
     output_id = str(request.match_info["id"])
@@ -716,6 +733,27 @@ async def toggle_favorite_output(request):
         all_favs = [str(r["speaker_id"]) for r in fav_rows]
 
     return web.json_response({"success": True, "isFavorite": is_fav, "favoriteSpeakers": all_favs})
+
+async def toggle_autoconnect_output(request):
+    output_id = str(request.match_info["id"])
+    is_auto = False
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)")
+        c.execute("SELECT speaker_id FROM auto_connect_speakers WHERE speaker_id=?", (output_id,))
+        row = c.fetchone()
+        if row:
+            c.execute("DELETE FROM auto_connect_speakers WHERE speaker_id=?", (output_id,))
+            is_auto = False
+        else:
+            c.execute("INSERT OR REPLACE INTO auto_connect_speakers (speaker_id) VALUES (?)", (output_id,))
+            is_auto = True
+        conn.commit()
+
+        auto_rows = conn.execute("SELECT speaker_id FROM auto_connect_speakers").fetchall()
+        all_autos = [str(r["speaker_id"]) for r in auto_rows]
+
+    return web.json_response({"success": True, "autoConnect": is_auto, "autoConnectSpeakers": all_autos})
 
 async def ensure_owntone_playing():
     """
@@ -1797,11 +1835,18 @@ async def auto_connect_startup_speakers(app):
         fav_ids = set()
         with get_db() as conn:
             try:
-                conn.execute("CREATE TABLE IF NOT EXISTS favorite_speakers (speaker_id TEXT PRIMARY KEY)")
-                for row in conn.execute("SELECT speaker_id FROM favorite_speakers"):
+                conn.execute("CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)")
+                for row in conn.execute("SELECT speaker_id FROM auto_connect_speakers"):
                     fav_ids.add(str(row["speaker_id"]))
             except Exception:
                 pass
+            if not fav_ids:
+                try:
+                    conn.execute("CREATE TABLE IF NOT EXISTS favorite_speakers (speaker_id TEXT PRIMARY KEY)")
+                    for row in conn.execute("SELECT speaker_id FROM favorite_speakers"):
+                        fav_ids.add(str(row["speaker_id"]))
+                except Exception:
+                    pass
 
         if not fav_ids:
             break
@@ -1853,6 +1898,7 @@ def main():
     app.router.add_post('/api/owntone/outputs/{id}/toggle', toggle_owntone_output)
     app.router.add_post('/api/owntone/outputs/{id}/volume', set_owntone_output_volume)
     app.router.add_post('/api/owntone/outputs/{id}/favorite', toggle_favorite_output)
+    app.router.add_post('/api/owntone/outputs/{id}/autoconnect', toggle_autoconnect_output)
     app.router.add_get('/api/owntone/player', get_owntone_player)
     app.router.add_post('/api/owntone/player/play', start_owntone_player)
     app.router.add_post('/api/owntone/player/toggle', start_owntone_player)

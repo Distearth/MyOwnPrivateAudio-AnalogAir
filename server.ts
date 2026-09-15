@@ -65,6 +65,7 @@ interface StoredData {
     hasOverride: boolean;
   }>;
   favoriteSpeakers: string[];
+  autoConnectSpeakers: string[];
 }
 
 const defaultData: StoredData = {
@@ -138,7 +139,8 @@ const defaultData: StoredData = {
       hasOverride: false
     }
   ],
-  favoriteSpeakers: ['airplay_living_room', 'chromecast_den']
+  favoriteSpeakers: ['airplay_living_room', 'chromecast_den'],
+  autoConnectSpeakers: ['airplay_living_room']
 };
 
 function loadData(): StoredData {
@@ -149,7 +151,9 @@ function loadData(): StoredData {
         ...defaultData,
         ...raw,
         settings: { ...defaultData.settings, ...(raw.settings || {}) },
-        tone: { ...defaultData.tone, ...(raw.tone || {}) }
+        tone: { ...defaultData.tone, ...(raw.tone || {}) },
+        favoriteSpeakers: Array.isArray(raw.favoriteSpeakers) ? raw.favoriteSpeakers : defaultData.favoriteSpeakers,
+        autoConnectSpeakers: Array.isArray(raw.autoConnectSpeakers) ? raw.autoConnectSpeakers : defaultData.autoConnectSpeakers
       };
       return merged;
     }
@@ -971,9 +975,14 @@ app.get('/api/owntone/outputs', (req, res) => {
   const outputs = owntoneOutputs.map(out => ({
     ...out,
     id: String(out.id),
-    isFavorite: db.favoriteSpeakers.map(String).includes(String(out.id))
+    isFavorite: (db.favoriteSpeakers || []).map(String).includes(String(out.id)),
+    autoConnect: (db.autoConnectSpeakers || []).map(String).includes(String(out.id))
   }));
-  res.json({ outputs, favoriteSpeakers: db.favoriteSpeakers.map(String) });
+  res.json({
+    outputs,
+    favoriteSpeakers: (db.favoriteSpeakers || []).map(String),
+    autoConnectSpeakers: (db.autoConnectSpeakers || []).map(String)
+  });
 });
 
 // Toggle output on/off: Defaults destination to 100% volume when activated
@@ -1062,6 +1071,20 @@ app.post('/api/owntone/purge-buffer', (req, res) => {
 // Proxy route for background live audio stream
 app.get(['/stream.mp3', '/api/stream.mp3'], (req, res) => {
   const http = require('http');
+
+  // Make sure OwnTone is in the play state
+  try {
+    const playReq = http.request({
+      hostname: '127.0.0.1',
+      port: 3689,
+      path: '/api/player/play',
+      method: 'PUT',
+      timeout: 1000
+    });
+    playReq.on('error', () => {});
+    playReq.end();
+  } catch {}
+
   const proxyReq = http.request('http://127.0.0.1:3689/stream.mp3', (proxyRes: any) => {
     res.writeHead(proxyRes.statusCode || 200, {
       'Content-Type': 'audio/mpeg',
@@ -1095,6 +1118,7 @@ app.post('/api/owntone/outputs/:id/volume', (req, res) => {
 
 app.post('/api/owntone/outputs/:id/favorite', (req, res) => {
   const id = String(req.params.id);
+  if (!db.favoriteSpeakers) db.favoriteSpeakers = [];
   const isFav = db.favoriteSpeakers.map(String).includes(id);
   if (isFav) {
     db.favoriteSpeakers = db.favoriteSpeakers.map(String).filter(s => s !== id);
@@ -1103,6 +1127,19 @@ app.post('/api/owntone/outputs/:id/favorite', (req, res) => {
   }
   saveData(db);
   res.json({ success: true, isFavorite: !isFav, favoriteSpeakers: db.favoriteSpeakers.map(String) });
+});
+
+app.post('/api/owntone/outputs/:id/autoconnect', (req, res) => {
+  const id = String(req.params.id);
+  if (!db.autoConnectSpeakers) db.autoConnectSpeakers = [];
+  const isAuto = db.autoConnectSpeakers.map(String).includes(id);
+  if (isAuto) {
+    db.autoConnectSpeakers = db.autoConnectSpeakers.map(String).filter(s => s !== id);
+  } else {
+    db.autoConnectSpeakers.push(id);
+  }
+  saveData(db);
+  res.json({ success: true, autoConnect: !isAuto, autoConnectSpeakers: db.autoConnectSpeakers.map(String) });
 });
 
 // 9. System Preferences

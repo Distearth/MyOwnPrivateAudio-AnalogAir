@@ -16,6 +16,9 @@ import {
   Play,
   RotateCcw,
   Star,
+  Heart,
+  Zap,
+  Speaker,
   Download,
   Copy,
   Check,
@@ -57,10 +60,13 @@ interface ControlsOverlayProps {
   outputs: OwnToneOutput[];
   sessions: PlaySession[];
   settings: SystemPreferences;
+  initialTab?: 'quick' | 'tone' | 'speakers' | 'history' | 'update' | 'settings';
+  onTabChange?: (tab: 'quick' | 'tone' | 'speakers' | 'history' | 'update' | 'settings') => void;
   onUpdateTone: (newTone: Partial<ToneControls>, immediate?: boolean) => void;
   onToggleOutput: (id: string) => void;
   onUpdateOutputVolume: (id: string, vol: number) => void;
   onToggleFavoriteOutput: (id: string) => void;
+  onToggleAutoConnectOutput?: (id: string) => void;
   onToggleMode: (continuous: boolean) => void;
   onOpenEditMetadata: () => void;
   onUpdateSettings: (newSettings: Partial<SystemPreferences>) => void;
@@ -76,17 +82,31 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
   outputs,
   sessions,
   settings,
+  initialTab,
+  onTabChange,
   onUpdateTone,
   onToggleOutput,
   onUpdateOutputVolume,
   onToggleFavoriteOutput,
+  onToggleAutoConnectOutput,
   onToggleMode,
   onOpenEditMetadata,
   onUpdateSettings,
   onDeleteSession,
   onPurgeBuffer
 }) => {
-  const [activeTab, setActiveTab] = useState<'quick' | 'tone' | 'speakers' | 'history' | 'update' | 'settings'>('quick');
+  const [activeTab, setActiveTab] = useState<'quick' | 'tone' | 'speakers' | 'history' | 'update' | 'settings'>(initialTab || 'quick');
+
+  React.useEffect(() => {
+    if (initialTab && isOpen) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab, isOpen]);
+
+  const handleTabClick = (tab: 'quick' | 'tone' | 'speakers' | 'history' | 'update' | 'settings') => {
+    setActiveTab(tab);
+    if (onTabChange) onTabChange(tab);
+  };
   const [copiedCmdId, setCopiedCmdId] = useState<string | null>(null);
   const [isUploadingArt, setIsUploadingArt] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -209,10 +229,22 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
     }
   };
 
-  // Sort speakers with favorites on top
+  // Sort speakers: Favorites and auto connect stay at the top of the list
   const sortedOutputs = [...outputs].sort((a, b) => {
-    if (a.isFavorite && !b.isFavorite) return -1;
-    if (!a.isFavorite && b.isFavorite) return 1;
+    const aPinned = Boolean(a.isFavorite || a.autoConnect);
+    const bPinned = Boolean(b.isFavorite || b.autoConnect);
+    if (aPinned && !bPinned) return -1;
+    if (!aPinned && bPinned) return 1;
+
+    // If both pinned or neither, rank by combined flags (both > favorite > auto-connect)
+    const aPinScore = (a.isFavorite ? 2 : 0) + (a.autoConnect ? 1 : 0);
+    const bPinScore = (b.isFavorite ? 2 : 0) + (b.autoConnect ? 1 : 0);
+    if (aPinScore !== bPinScore) return bPinScore - aPinScore;
+
+    // Then active/selected status
+    if (a.selected && !b.selected) return -1;
+    if (!a.selected && b.selected) return 1;
+
     return a.name.localeCompare(b.name);
   });
 
@@ -688,20 +720,20 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="flex flex-col gap-2.5 sm:grid sm:grid-cols-1 md:grid-cols-2 sm:gap-3">
                 {sortedOutputs.map((out) => {
                   return (
                     <div
                       key={out.id}
-                      className={`p-4 rounded-2xl border transition-all flex flex-col justify-between gap-3 ${
+                      className={`p-3.5 sm:p-4 rounded-2xl border transition-all flex flex-col justify-between gap-3 ${
                         out.selected
                           ? 'bg-neutral-900 border-amber-500/50 shadow-lg'
-                          : 'bg-neutral-950/60 border-neutral-800/80 opacity-70'
+                          : 'bg-neutral-950/60 border-neutral-800/80 hover:border-neutral-700/90'
                       }`}
                     >
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className={`p-2.5 rounded-xl border ${
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`p-2.5 rounded-xl border shrink-0 ${
                             out.selected 
                               ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' 
                               : 'bg-neutral-800 text-neutral-400 border-neutral-700'
@@ -711,13 +743,19 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                             {out.type === 'bluetooth' && <Volume2 className="w-5 h-5" />}
                             {out.type === 'local' && <Cpu className="w-5 h-5" />}
                           </div>
-                          <div>
+                          <div className="min-w-0 flex-1">
                             <h4 className="text-sm font-bold text-neutral-100 flex items-center gap-1.5 flex-wrap">
-                              <span>{out.name}</span>
+                              <span className="truncate">{out.name}</span>
                               {out.isFavorite && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded border border-rose-500/20">
+                                  <Heart className="w-2.5 h-2.5 fill-rose-400" />
+                                  Favorite
+                                </span>
+                              )}
+                              {out.autoConnect && (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
-                                  <Star className="w-2.5 h-2.5 fill-amber-400" />
-                                  Auto-Connects on Boot
+                                  <Zap className="w-2.5 h-2.5 fill-amber-400" />
+                                  Auto-Connect
                                 </span>
                               )}
                             </h4>
@@ -727,30 +765,54 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1.5">
+                        {/* Action buttons: Favorite, Auto-Connect, Turn On / Playing */}
+                        <div className="flex items-center gap-1.5 self-end sm:self-start shrink-0">
+                          {/* 1. Favorites Button */}
                           <button
+                            type="button"
                             onClick={() => onToggleFavoriteOutput(out.id)}
-                            title={out.isFavorite ? "Remove from startup auto-connect" : "Always connect to this speaker on boot"}
-                            className={`px-2.5 py-1.5 rounded-xl border transition-colors flex items-center gap-1.5 text-xs ${
+                            title={out.isFavorite ? "Remove from favorites" : "Add to favorites"}
+                            className={`px-2.5 py-1.5 rounded-xl border transition-colors flex items-center gap-1 text-xs active:scale-95 ${
                               out.isFavorite 
+                                ? 'text-rose-300 bg-rose-500/15 border-rose-500/30 hover:bg-rose-500/25' 
+                                : 'text-neutral-400 bg-neutral-800/60 border-neutral-700 hover:text-neutral-200'
+                            }`}
+                          >
+                            <Heart className={`w-3.5 h-3.5 ${out.isFavorite ? 'text-rose-400 fill-rose-400' : ''}`} />
+                            <span className="text-[11px] font-medium">
+                              {out.isFavorite ? 'Favorite' : 'Fav'}
+                            </span>
+                          </button>
+
+                          {/* 2. Auto-Connect Button */}
+                          <button
+                            type="button"
+                            onClick={() => onToggleAutoConnectOutput ? onToggleAutoConnectOutput(out.id) : onToggleFavoriteOutput(out.id)}
+                            title={out.autoConnect ? "Disable startup auto-connect" : "Always connect to this speaker on boot"}
+                            className={`px-2.5 py-1.5 rounded-xl border transition-colors flex items-center gap-1 text-xs active:scale-95 ${
+                              out.autoConnect 
                                 ? 'text-amber-300 bg-amber-500/15 border-amber-500/30 hover:bg-amber-500/25' 
                                 : 'text-neutral-400 bg-neutral-800/60 border-neutral-700 hover:text-neutral-200'
                             }`}
                           >
-                            <Star className={`w-3.5 h-3.5 ${out.isFavorite ? 'text-amber-400 fill-amber-400' : ''}`} />
-                            <span className="hidden sm:inline text-[11px] font-medium">
-                              {out.isFavorite ? 'Auto-Connect: On' : 'Auto-Connect: Off'}
+                            <Zap className={`w-3.5 h-3.5 ${out.autoConnect ? 'text-amber-400 fill-amber-400' : ''}`} />
+                            <span className="text-[11px] font-medium">
+                              <span className="hidden md:inline">{out.autoConnect ? 'Auto: On' : 'Auto: Off'}</span>
+                              <span className="md:hidden">{out.autoConnect ? 'Auto' : 'Auto'}</span>
                             </span>
                           </button>
+
+                          {/* 3. Output Play / Select Button */}
                           <button
+                            type="button"
                             onClick={() => onToggleOutput(out.id)}
-                            className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-colors ${
+                            className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-colors active:scale-95 ${
                               out.selected
                                 ? 'bg-amber-500 text-neutral-950 hover:bg-amber-400'
-                                : 'bg-neutral-800 text-neutral-400 hover:text-white'
+                                : 'bg-neutral-800 text-neutral-300 hover:text-white hover:bg-neutral-700'
                             }`}
                           >
-                            {out.selected ? 'Playing (100%)' : 'Turn On'}
+                            {out.selected ? 'Playing' : 'Turn On'}
                           </button>
                         </div>
                       </div>
@@ -758,16 +820,16 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                       {/* Volume Slider (Defaults to 100% when turned on) */}
                       {out.selected && (
                         <div className="pt-2 border-t border-neutral-800/80 flex items-center gap-3">
-                          <Volume2 className="w-4 h-4 text-neutral-400" />
+                          <Volume2 className="w-4 h-4 text-neutral-400 shrink-0" />
                           <input
                             type="range"
                             min="0"
                             max="100"
                             value={out.volume}
                             onChange={(e) => onUpdateOutputVolume(out.id, parseInt(e.target.value, 10))}
-                            className="flex-1"
+                            className="flex-1 accent-amber-500"
                           />
-                          <span className="text-xs font-mono text-neutral-400 w-10 text-right">
+                          <span className="text-xs font-mono text-neutral-400 w-10 text-right shrink-0">
                             {out.volume}%
                           </span>
                         </div>

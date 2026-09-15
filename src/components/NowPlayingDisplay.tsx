@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Disc, Music, Sliders, Radio, Sparkles, CheckCircle2, CassetteTape, Disc3, Mic2, Maximize2, Minimize2, RefreshCw, Volume2, VolumeX, Square, Loader2 } from 'lucide-react';
+import { Disc, Music, Sliders, Radio, Sparkles, CheckCircle2, CassetteTape, Disc3, Mic2, Maximize2, Minimize2, RefreshCw, Volume2, VolumeX, Square, Loader2, Speaker } from 'lucide-react';
 import { NowPlayingState, SystemPreferences } from '../types';
 import { sanitizeAlbumTitle, sanitizeTrackTitle } from '../utils/sanitize';
 import vinylDefaultArt from '../assets/images/analogair_idle_art_1788723997443.jpg';
@@ -10,6 +10,7 @@ interface NowPlayingDisplayProps {
   state: NowPlayingState;
   settings?: SystemPreferences;
   onOpenControls: () => void;
+  onOpenSpeakers?: () => void;
   onOpenEditMetadata: () => void;
   onPurgeBuffer?: () => Promise<void> | void;
   onWakeScreen?: () => void;
@@ -19,6 +20,7 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
   state,
   settings,
   onOpenControls,
+  onOpenSpeakers,
   onOpenEditMetadata,
   onPurgeBuffer,
   onWakeScreen
@@ -442,6 +444,22 @@ export const NowPlayingDisplay: React.FC<NowPlayingDisplayProps> = ({
               {purgeFeedback ? 'Synced' : isPurging ? '...' : 'Purge'}
             </span>
           </button>
+
+          {/* Quick Speakers List button */}
+          {onOpenSpeakers && (
+            <button
+              id="open-speakers-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenSpeakers();
+              }}
+              title="Speakers & AirPlay Outputs"
+              aria-label="Speakers list"
+              className="flex items-center justify-center p-2 sm:px-2.5 sm:py-1.5 bg-neutral-800/90 hover:bg-neutral-700 text-neutral-100 rounded-xl border border-neutral-700/80 transition-colors shadow-lg active:scale-95"
+            >
+              <Speaker className="w-4 h-4 text-amber-400" />
+            </button>
+          )}
 
           {/* Controls button */}
           <button

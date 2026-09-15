@@ -460,9 +460,24 @@ def get_favorite_speaker_ids():
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT output_id FROM favorite_speakers")
-        for row in c.fetchall():
-            favs.add(str(row[0]))
+        try:
+            c.execute("SELECT speaker_id FROM auto_connect_speakers")
+            for row in c.fetchall():
+                favs.add(str(row[0]))
+        except Exception:
+            pass
+        if not favs:
+            try:
+                c.execute("SELECT speaker_id FROM favorite_speakers")
+                for row in c.fetchall():
+                    favs.add(str(row[0]))
+            except Exception:
+                try:
+                    c.execute("SELECT output_id FROM favorite_speakers")
+                    for row in c.fetchall():
+                        favs.add(str(row[0]))
+                except Exception:
+                    pass
         conn.close()
     except Exception:
         pass
