@@ -74,17 +74,15 @@ When updates are pushed to GitHub, services should always be stopped prior to up
 
 ### Method 1: Automated 1-Command Update (Recommended)
 
-AnalogAir includes an automated update script (`update.sh`) that stops background services, pulls the latest commits from Git, syncs virtual environment dependencies and web assets, and restarts the services:
+To guarantee that all changed scripts, virtualenv packages, and web UI build assets cleanly replace existing files without git merge conflicts, the update process pauses background services, removes the existing repository folder, pulls down a fresh clone from GitHub, runs the installer, and restarts services:
 
 ```bash
-cd ~/MyOwnPrivateAudio-AnalogAir
-chmod +x update.sh
-./update.sh
+systemctl --user stop analogair-capture analogair-daemon analogair-web 2>/dev/null || true; cd ~ && rm -rf ~/MyOwnPrivateAudio-AnalogAir && git clone https://github.com/Distearth/MyOwnPrivateAudio-AnalogAir.git && cd ~/MyOwnPrivateAudio-AnalogAir && chmod +x install.sh update.sh && ./install.sh && systemctl --user daemon-reload && systemctl --user restart analogair-capture analogair-daemon analogair-web
 ```
 
-Or run directly in a single chained terminal line:
+Or run via the automated `update.sh` script (which also cleans and re-clones the directory):
 ```bash
-systemctl --user stop analogair-capture analogair-daemon analogair-web && cd ~/MyOwnPrivateAudio-AnalogAir && git pull origin main && ./install.sh && systemctl --user restart analogair-capture analogair-daemon analogair-web
+cd ~/MyOwnPrivateAudio-AnalogAir && bash ./update.sh
 ```
 
 ### Method 2: Step-by-Step Manual Update
@@ -95,10 +93,9 @@ If you prefer to perform each step manually:
    ```bash
    systemctl --user stop analogair-capture.service analogair-daemon.service analogair-web.service
    ```
-2. **Pull the latest code from GitHub**:
+2. **Remove old folder and pull a clean copy from GitHub**:
    ```bash
-   cd ~/MyOwnPrivateAudio-AnalogAir
-   git pull origin main
+   cd ~ && rm -rf ~/MyOwnPrivateAudio-AnalogAir && git clone https://github.com/Distearth/MyOwnPrivateAudio-AnalogAir.git && cd ~/MyOwnPrivateAudio-AnalogAir
    ```
 3. **Update dependencies and sync scripts**:
    ```bash

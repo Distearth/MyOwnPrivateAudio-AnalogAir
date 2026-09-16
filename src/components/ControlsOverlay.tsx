@@ -918,7 +918,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                   <h3>Update AnalogAir to Latest GitHub Version</h3>
                 </div>
                 <p className="text-xs text-neutral-300">
-                  Update your Raspberry Pi installation with safe background service management. Services are paused before updating to prevent file locks or audio pipe collisions, then automatically restarted with the new code.
+                  Update your Raspberry Pi installation with safe background service management. Services are paused, the existing folder is removed and pulled clean from GitHub to guarantee all updated scripts and UI assets replace old code, then automatically re-installed and restarted.
                 </p>
               </div>
 
@@ -926,50 +926,50 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
               <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl space-y-2">
                 <div className="flex items-center gap-2 font-bold text-amber-300 text-xs">
                   <AlertCircle className="w-4 h-4 text-amber-400" />
-                  <span>Why Stop Services Before Updating?</span>
+                  <span>Clean Update &amp; Service Management</span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
-                  AnalogAir runs three continuous background user services: <code className="text-amber-200 font-mono">analogair-capture</code> (reading your turntable USB hardware), <code className="text-amber-200 font-mono">analogair-daemon</code> (running acoustic recognition), and <code className="text-amber-200 font-mono">analogair-web</code> (serving this web interface). Stopping them ensures that Python files, virtualenv libraries, and the audio FIFO pipe are not locked during git updates.
+                  AnalogAir runs three background user services: <code className="text-amber-200 font-mono">analogair-capture</code>, <code className="text-amber-200 font-mono">analogair-daemon</code>, and <code className="text-amber-200 font-mono">analogair-web</code>. Stopping them first prevents audio FIFO collisions and file locks. Removing the folder and pulling down a clean clone ensures any changed files completely replace the old code without merge conflicts. Your persistent database (<code className="text-amber-200 font-mono">~/.config/analogair/analogair.db</code>) and settings are preserved outside the repository.
                 </p>
               </div>
 
-              {/* Method 1: 1-Command Automated Updater (Recommended) */}
+              {/* Method 1: 1-Command Automated Clean Updater (Recommended) */}
               <div className="p-4 bg-neutral-950/80 border border-neutral-800 rounded-2xl space-y-3">
                 <div>
                   <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-                    Method 1: One-Line Automated Update (Recommended)
+                    Method 1: One-Line Clean Automated Update (Recommended)
                   </span>
                   <p className="text-xs text-neutral-400 mt-0.5">
-                    Runs the automated updater script: stops services &rarr; pulls latest git commits &rarr; refreshes python dependencies & UI &rarr; restarts services.
+                    Stops services &rarr; removes existing folder &rarr; clones fresh repository from GitHub &rarr; runs installer to sync scripts &amp; UI &rarr; restarts services.
                   </p>
                 </div>
 
-                <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-xl flex items-center justify-between font-mono text-xs text-amber-300">
-                  <span className="truncate mr-2 select-all cursor-text" title="Click to select all">
+                <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-xl flex items-center justify-between font-mono text-xs text-emerald-300">
+                  <span className="truncate mr-2 select-all cursor-text text-[11px]" title="Click to select all">
+                    {"systemctl --user stop analogair-capture analogair-daemon analogair-web 2>/dev/null || true; cd ~ && rm -rf ~/MyOwnPrivateAudio-AnalogAir && git clone https://github.com/Distearth/MyOwnPrivateAudio-AnalogAir.git && cd ~/MyOwnPrivateAudio-AnalogAir && chmod +x install.sh update.sh && ./install.sh && systemctl --user daemon-reload && systemctl --user restart analogair-capture analogair-daemon analogair-web"}
+                  </span>
+                  <button
+                    onClick={() => copyCommand('systemctl --user stop analogair-capture analogair-daemon analogair-web 2>/dev/null || true; cd ~ && rm -rf ~/MyOwnPrivateAudio-AnalogAir && git clone https://github.com/Distearth/MyOwnPrivateAudio-AnalogAir.git && cd ~/MyOwnPrivateAudio-AnalogAir && chmod +x install.sh update.sh && ./install.sh && systemctl --user daemon-reload && systemctl --user restart analogair-capture analogair-daemon analogair-web', 'full-pipe-update')}
+                    className="p-1.5 hover:bg-neutral-800 rounded-lg text-neutral-400 hover:text-white transition-colors flex-shrink-0"
+                    title="Copy Clean Update Command"
+                  >
+                    {copiedCmdId === 'full-pipe-update' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+
+                <p className="text-xs text-neutral-500">
+                  Or run via the automated updater script (which also cleanly refreshes the folder):
+                </p>
+                <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl flex items-center justify-between font-mono text-xs text-amber-300">
+                  <span className="truncate mr-2 select-all cursor-text text-xs" title="Click to select all">
                     cd ~/MyOwnPrivateAudio-AnalogAir && bash ./update.sh
                   </span>
                   <button
                     onClick={() => copyCommand('cd ~/MyOwnPrivateAudio-AnalogAir && bash ./update.sh', 'quick-update')}
                     className="p-1.5 hover:bg-neutral-800 rounded-lg text-neutral-400 hover:text-white transition-colors flex-shrink-0"
-                    title="Copy Command"
+                    title="Copy Script Command"
                   >
                     {copiedCmdId === 'quick-update' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                  </button>
-                </div>
-
-                <p className="text-xs text-neutral-500">
-                  Or run with one direct chained command if preferred:
-                </p>
-                <div className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl flex items-center justify-between font-mono text-xs text-neutral-300">
-                  <span className="truncate mr-2 text-[11px] select-all cursor-text" title="Click to select all">
-                    systemctl --user stop analogair-capture analogair-daemon analogair-web && cd ~/MyOwnPrivateAudio-AnalogAir && git pull origin main && ./install.sh && systemctl --user restart analogair-capture analogair-daemon analogair-web
-                  </span>
-                  <button
-                    onClick={() => copyCommand('systemctl --user stop analogair-capture analogair-daemon analogair-web && cd ~/MyOwnPrivateAudio-AnalogAir && git pull origin main && ./install.sh && systemctl --user restart analogair-capture analogair-daemon analogair-web', 'full-pipe-update')}
-                    className="p-1.5 hover:bg-neutral-800 rounded-lg text-neutral-400 hover:text-white transition-colors flex-shrink-0"
-                    title="Copy Full Command"
-                  >
-                    {copiedCmdId === 'full-pipe-update' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
@@ -1011,10 +1011,10 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
                         <span className="w-4 h-4 rounded-full bg-neutral-800 text-neutral-300 flex items-center justify-center text-[10px] font-bold">2</span>
-                        Pull Latest Commits from GitHub
+                        Remove Old Folder &amp; Pull Fresh Clone from GitHub
                       </span>
                       <button
-                        onClick={() => copyCommand('cd ~/MyOwnPrivateAudio-AnalogAir && git pull origin main', 'step-2')}
+                        onClick={() => copyCommand('cd ~ && rm -rf ~/MyOwnPrivateAudio-AnalogAir && git clone https://github.com/Distearth/MyOwnPrivateAudio-AnalogAir.git && cd ~/MyOwnPrivateAudio-AnalogAir', 'step-2')}
                         className="text-[11px] text-neutral-400 hover:text-white flex items-center gap-1"
                       >
                         {copiedCmdId === 'step-2' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -1022,7 +1022,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                       </button>
                     </div>
                     <pre className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl font-mono text-xs text-amber-300 overflow-x-auto">
-                      cd ~/MyOwnPrivateAudio-AnalogAir && git pull origin main
+                      cd ~ &amp;&amp; rm -rf ~/MyOwnPrivateAudio-AnalogAir &amp;&amp; git clone https://github.com/Distearth/MyOwnPrivateAudio-AnalogAir.git &amp;&amp; cd ~/MyOwnPrivateAudio-AnalogAir
                     </pre>
                   </div>
 
@@ -1031,7 +1031,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
                         <span className="w-4 h-4 rounded-full bg-neutral-800 text-neutral-300 flex items-center justify-center text-[10px] font-bold">3</span>
-                        Sync Scripts & Update Virtual Environment
+                        Sync Scripts &amp; Run Automated Installer
                       </span>
                       <button
                         onClick={() => copyCommand('chmod +x ./install.sh && ./install.sh', 'step-3')}
@@ -1042,7 +1042,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                       </button>
                     </div>
                     <pre className="p-2.5 bg-neutral-900 border border-neutral-800 rounded-xl font-mono text-xs text-amber-300 overflow-x-auto">
-                      chmod +x ./install.sh && ./install.sh
+                      chmod +x ./install.sh &amp;&amp; ./install.sh
                     </pre>
                   </div>
 
