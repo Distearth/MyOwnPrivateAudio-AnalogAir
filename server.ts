@@ -1213,7 +1213,7 @@ app.post('/api/system/power', (req, res) => {
 
     setTimeout(() => {
       const { exec } = require('child_process');
-      const preShutdownCmd = 'sudo /usr/local/bin/analogair-pre-shutdown.sh 2>/dev/null || (sudo pkill -9 owntone 2>/dev/null; sudo pkill -9 avahi-daemon 2>/dev/null; for dev in /sys/class/net/*; do d=$(basename $dev); [ "$d" != "lo" ] && sudo ip link set $d down 2>/dev/null; done)';
+      const preShutdownCmd = 'sudo /usr/local/bin/analogair-pre-shutdown.sh 2>/dev/null || (sudo iptables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null; sudo iptables -I OUTPUT 2 -j DROP 2>/dev/null; for dev in /sys/class/net/*; do d=$(basename $dev); [ "$d" != "lo" ] && sudo ip link set $d down 2>/dev/null; done; sudo pkill -9 -f analogair_daemon.py 2>/dev/null; sudo pkill -9 -f analogair_capture.py 2>/dev/null; sudo pkill -9 owntone 2>/dev/null; sudo pkill -9 avahi-daemon 2>/dev/null)';
       exec(preShutdownCmd, () => {
         if (action === 'shutdown') {
           exec('sudo systemctl poweroff 2>/dev/null || sudo shutdown -h now 2>/dev/null');

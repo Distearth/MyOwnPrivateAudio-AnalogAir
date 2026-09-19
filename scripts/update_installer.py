@@ -477,25 +477,16 @@ if [ -f "$PIDFILE" ]; then
 fi
 touch "$PIDFILE" 2>/dev/null || true
 
-echo "[AnalogAir] Pre-shutdown: Terminating OwnTone and severing all network links..."
+echo "[AnalogAir] Pre-shutdown: Severing all network links FIRST to prevent speaker reconnect..."
 
-# 1. Terminate OwnTone immediately so no AirPlay keep-alives or teardowns are transmitted
-systemctl stop owntone.service 2>/dev/null || true
-systemctl stop owntone 2>/dev/null || true
-pkill -9 owntone 2>/dev/null || true
-
-# 2. Stop Avahi (mDNS / Bonjour) to halt network speaker announcements
-systemctl stop avahi-daemon.service 2>/dev/null || true
-systemctl stop avahi-daemon 2>/dev/null || true
-pkill -9 avahi-daemon 2>/dev/null || true
-
-# 3. Drop all non-loopback outbound traffic via iptables immediately
+# 1. Drop all non-loopback outbound traffic via iptables immediately
+# Prevents any packet from reaching AirPlay speakers, AVRs, or the LAN
 iptables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true
 iptables -I OUTPUT 2 -j DROP 2>/dev/null || true
 ip6tables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true
 ip6tables -I OUTPUT 2 -j DROP 2>/dev/null || true
 
-# 4. Bring down all physical and wireless network interfaces (Ethernet & Wi-Fi)
+# 2. Bring down all physical and wireless network interfaces (Ethernet & Wi-Fi)
 for dev_path in /sys/class/net/*; do
     [ -e "$dev_path" ] || continue
     dev=$(basename "$dev_path")
@@ -504,9 +495,35 @@ for dev_path in /sys/class/net/*; do
     fi
 done
 
-# 5. Stop NetworkManager and wireless supplicants
+# 3. Stop network connection managers immediately
 systemctl stop NetworkManager 2>/dev/null || true
 systemctl stop wpa_supplicant 2>/dev/null || true
+systemctl stop systemd-networkd 2>/dev/null || true
+systemctl stop dhcpcd 2>/dev/null || true
+
+# 4. Terminate AnalogAir background processes to kill any auto-reconnect loops
+pkill -9 -f "analogair_daemon.py" 2>/dev/null || true
+pkill -9 -f "analogair_capture.py" 2>/dev/null || true
+pkill -9 -f "arecord" 2>/dev/null || true
+pkill -9 -f "ffmpeg" 2>/dev/null || true
+
+# Also attempt user service stops across active sessions
+for u in $(who | awk '{{print $1}}' | sort -u); do
+    uid=$(id -u "$u" 2>/dev/null)
+    if [ -n "$uid" ]; then
+        XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user stop analogair-daemon.service analogair-capture.service 2>/dev/null || true
+    fi
+done
+
+# 5. Terminate OwnTone immediately with network already dead (no teardown packets can escape)
+systemctl stop owntone.service 2>/dev/null || true
+systemctl stop owntone 2>/dev/null || true
+pkill -9 owntone 2>/dev/null || true
+
+# 6. Stop Avahi (mDNS / Bonjour) to halt network announcements
+systemctl stop avahi-daemon.service 2>/dev/null || true
+systemctl stop avahi-daemon 2>/dev/null || true
+pkill -9 avahi-daemon 2>/dev/null || true
 
 exit 0
 SHUTDOWNEOF

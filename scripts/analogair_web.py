@@ -1613,29 +1613,30 @@ async def save_settings(request):
 async def _execute_clean_power(action: str):
     await asyncio.sleep(0.3)
     try:
-        # 1. Stop OwnTone playback immediately so it stops sending audio packets
-        async with aiohttp.ClientSession() as session:
-            try:
-                await session.put(f"{OWNTONE_BASE}/api/player/stop", timeout=aiohttp.ClientTimeout(total=1))
-            except Exception:
-                pass
-
-        # 2. Run dedicated pre-shutdown network killer script if present
+        # 1. Run dedicated pre-shutdown network killer script FIRST
+        # This cuts network interfaces, drops outbound traffic, and kills daemon loops
+        # BEFORE OwnTone can send AirPlay packets or wake up receivers.
         pre_shutdown_script = Path("/usr/local/bin/analogair-pre-shutdown.sh")
         if pre_shutdown_script.exists():
-            subprocess.run(["sudo", str(pre_shutdown_script)], timeout=4)
+            subprocess.run(["sudo", str(pre_shutdown_script)], timeout=5)
         else:
-            # Inline fallback: kill OwnTone & Avahi, then bring down network interfaces
-            subprocess.run(["sudo", "pkill", "-9", "owntone"], timeout=2)
-            subprocess.run(["sudo", "pkill", "-9", "avahi-daemon"], timeout=2)
+            # Inline fallback: DROP network traffic FIRST, take down interfaces, then kill processes
+            subprocess.run([
+                "sudo", "sh", "-c",
+                "iptables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null; iptables -I OUTPUT 2 -j DROP 2>/dev/null; ip6tables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null; ip6tables -I OUTPUT 2 -j DROP 2>/dev/null"
+            ], timeout=2)
             subprocess.run([
                 "sudo", "sh", "-c",
                 "for dev in /sys/class/net/*; do d=$(basename $dev); [ \"$d\" != \"lo\" ] && ip link set $d down 2>/dev/null; done"
             ], timeout=2)
+            subprocess.run(["sudo", "pkill", "-9", "-f", "analogair_daemon.py"], timeout=2)
+            subprocess.run(["sudo", "pkill", "-9", "-f", "analogair_capture.py"], timeout=2)
+            subprocess.run(["sudo", "pkill", "-9", "owntone"], timeout=2)
+            subprocess.run(["sudo", "pkill", "-9", "avahi-daemon"], timeout=2)
     except Exception as e:
-        print(f"[AnalogAir Web] Pre-shutdown network kill error: {e}", flush=True)
+        print(f"[AnalogAir Web] Pre-power network kill error: {e}", flush=True)
 
-    # 3. Trigger clean poweroff or reboot
+    # 2. Trigger clean poweroff or reboot
     if action == "shutdown":
         subprocess.Popen(["sudo", "systemctl", "poweroff"])
     else:
