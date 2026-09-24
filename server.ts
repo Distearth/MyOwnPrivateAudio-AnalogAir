@@ -1065,6 +1065,14 @@ app.post('/api/owntone/player/toggle', (req, res) => {
 
 // Purge audio backlog and resync stream
 app.post('/api/owntone/purge-buffer', (req, res) => {
+  if (db.autoConnectSpeakers && Array.isArray(db.autoConnectSpeakers)) {
+    for (const out of owntoneOutputs) {
+      if (db.autoConnectSpeakers.map(String).includes(String(out.id))) {
+        out.selected = true;
+        out.volume = 100;
+      }
+    }
+  }
   res.json({ success: true, message: 'Audio backlog cleared and stream restarted.' });
 });
 

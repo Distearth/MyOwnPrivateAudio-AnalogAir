@@ -689,7 +689,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                 <div>
                   <h3 className="text-base font-bold text-neutral-100">AirPlay & Speaker Outputs</h3>
                   <p className="text-xs text-neutral-400">
-                    Selecting any destination sets volume to 100% and automatically resumes stream playback from the vinyl pipe.
+                    <strong className="text-neutral-300 font-semibold">Fav</strong> pins speakers to the top of the list for easy access. <strong className="text-amber-400 font-semibold">Auto</strong> reconnects after boot or extended silence needle drops. Turned-off speakers stay off until the next silence/purge event.
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -771,7 +771,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                           <button
                             type="button"
                             onClick={() => onToggleFavoriteOutput(out.id)}
-                            title={out.isFavorite ? "Remove from favorites" : "Add to favorites"}
+                            title={out.isFavorite ? "Remove from favorites (pinned to top)" : "Favorite: pins speaker to top of list without auto-connecting"}
                             className={`px-2.5 py-1.5 rounded-xl border transition-colors flex items-center gap-1 text-xs active:scale-95 ${
                               out.isFavorite 
                                 ? 'text-rose-300 bg-rose-500/15 border-rose-500/30 hover:bg-rose-500/25' 
@@ -788,7 +788,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
                           <button
                             type="button"
                             onClick={() => onToggleAutoConnectOutput ? onToggleAutoConnectOutput(out.id) : onToggleFavoriteOutput(out.id)}
-                            title={out.autoConnect ? "Disable startup auto-connect" : "Always connect to this speaker on boot"}
+                            title={out.autoConnect ? "Disable auto-connect on needle drop/boot" : "Auto-Connect: automatically connects after boot or silence needle drops"}
                             className={`px-2.5 py-1.5 rounded-xl border transition-colors flex items-center gap-1 text-xs active:scale-95 ${
                               out.autoConnect 
                                 ? 'text-amber-300 bg-amber-500/15 border-amber-500/30 hover:bg-amber-500/25' 

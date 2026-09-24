@@ -850,15 +850,18 @@ async def purge_owntone_buffer(request):
 
     await loop.run_in_executor(None, _restart_pipeline)
 
-    # Allow OwnTone 1.5s to rebind sockets, then ensure marked speakers and playback resume
+    # Allow OwnTone 1.5s to rebind sockets, then ensure marked auto-connect speakers and playback resume
     async def _post_restart_resume():
         await asyncio.sleep(1.8)
-        fav_ids = set()
+        auto_ids = set()
         with get_db() as conn:
-            for row in conn.execute("SELECT output_id FROM favorite_speakers"):
-                favs_id = str(row["output_id"])
-                fav_ids.add(favs_id)
-        if fav_ids:
+            try:
+                conn.execute("CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)")
+                for row in conn.execute("SELECT speaker_id FROM auto_connect_speakers"):
+                    auto_ids.add(str(row["speaker_id"]))
+            except Exception:
+                pass
+        if auto_ids:
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=3) as resp:
@@ -866,7 +869,7 @@ async def purge_owntone_buffer(request):
                             data = await resp.json()
                             for o in data.get("outputs", []):
                                 oid = str(o.get("id"))
-                                if oid in fav_ids:
+                                if oid in auto_ids:
                                     await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
             except Exception as err:
                 print(f"[AnalogAir Web] Post-purge speaker reconnect: {err}", flush=True)
@@ -1833,48 +1836,41 @@ async def serve_static_or_spa(request):
 async def auto_connect_startup_speakers(app):
     for delay in [3, 5, 7]:
         await asyncio.sleep(delay)
-        fav_ids = set()
+        auto_ids = set()
         with get_db() as conn:
             try:
                 conn.execute("CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)")
                 for row in conn.execute("SELECT speaker_id FROM auto_connect_speakers"):
-                    fav_ids.add(str(row["speaker_id"]))
+                    auto_ids.add(str(row["speaker_id"]))
             except Exception:
                 pass
-            if not fav_ids:
-                try:
-                    conn.execute("CREATE TABLE IF NOT EXISTS favorite_speakers (speaker_id TEXT PRIMARY KEY)")
-                    for row in conn.execute("SELECT speaker_id FROM favorite_speakers"):
-                        fav_ids.add(str(row["speaker_id"]))
-                except Exception:
-                    pass
 
-        if not fav_ids:
+        if not auto_ids:
             break
 
-        all_favs_active = True
+        all_autos_active = True
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=3) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         outputs = data.get("outputs", [])
-                        found_favs = set()
+                        found_autos = set()
                         for o in outputs:
                             oid = str(o.get("id"))
-                            if oid in fav_ids:
-                                found_favs.add(oid)
+                            if oid in auto_ids:
+                                found_autos.add(oid)
                                 if not o.get("selected", False):
-                                    all_favs_active = False
+                                    all_autos_active = False
                                     await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
                                     print(f"[AnalogAir Web] Auto-connected startup speaker: {o.get('name')}", flush=True)
-                        if fav_ids.issubset(found_favs) and all_favs_active:
+                        if auto_ids.issubset(found_autos) and all_autos_active:
                             await ensure_owntone_playing()
                             break
             except Exception as e:
                 print(f"[AnalogAir Web] Speaker auto-connect check: {e}", flush=True)
 
-        if fav_ids:
+        if auto_ids:
             await ensure_owntone_playing()
 
 async def start_background_tasks(app):

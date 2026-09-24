@@ -454,42 +454,32 @@ def get_owntone_player_info():
 
     return player_state, has_active_speakers
 
-def get_favorite_speaker_ids():
-    """Retrieves speaker IDs marked for auto-connect/favorite in the database."""
-    favs = set()
+def get_auto_connect_speaker_ids():
+    """
+    Retrieves speaker IDs marked specifically for auto-connect (auto_connect_speakers table).
+    Favorite speakers (favorite_speakers) are strictly for UI sorting and are NOT auto-connected.
+    """
+    auto_ids = set()
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        try:
-            c.execute("SELECT speaker_id FROM auto_connect_speakers")
-            for row in c.fetchall():
-                favs.add(str(row[0]))
-        except Exception:
-            pass
-        if not favs:
-            try:
-                c.execute("SELECT speaker_id FROM favorite_speakers")
-                for row in c.fetchall():
-                    favs.add(str(row[0]))
-            except Exception:
-                try:
-                    c.execute("SELECT output_id FROM favorite_speakers")
-                    for row in c.fetchall():
-                        favs.add(str(row[0]))
-                except Exception:
-                    pass
+        c.execute("CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)")
+        c.execute("SELECT speaker_id FROM auto_connect_speakers")
+        for row in c.fetchall():
+            auto_ids.add(str(row[0]))
         conn.close()
     except Exception:
         pass
-    return favs
+    return auto_ids
 
-def reconnect_marked_speakers():
+def reconnect_auto_speakers():
     """
-    Connects to speakers marked for auto-connect / favorite if none are currently active,
-    or if marked speakers got deselected during an HDMI or source switch.
+    Connects to speakers marked with Auto-Connect upon system boot or when
+    audio begins after a long period of silence (needle drop).
+    Never reconnects speakers marked only as favorites.
     """
-    fav_ids = get_favorite_speaker_ids()
-    if not fav_ids:
+    auto_ids = get_auto_connect_speaker_ids()
+    if not auto_ids:
         return
     try:
         r_o = requests.get("http://127.0.0.1:3689/api/outputs", timeout=2)
@@ -497,9 +487,9 @@ def reconnect_marked_speakers():
             outputs = r_o.json().get("outputs", [])
             for o in outputs:
                 oid = str(o.get("id"))
-                if oid in fav_ids and not o.get("selected", False):
+                if oid in auto_ids and not o.get("selected", False):
                     requests.put(f"http://127.0.0.1:3689/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
-                    print(f"[AnalogAir] Auto-reconnected marked speaker: {o.get('name')}", flush=True)
+                    print(f"[AnalogAir] Auto-connected marked speaker: {o.get('name')}", flush=True)
     except Exception as e:
         print(f"[AnalogAir] Speaker auto-reconnect error: {e}", flush=True)
 
@@ -721,6 +711,7 @@ async def main():
     session_locked = False
     current_track_id = None
     silence_counter = 0
+    was_silent_session = True
 
     restore_default_artwork()
     idle_artist = get_setting("idle_artist", "Audio-Technica")
@@ -775,6 +766,7 @@ async def main():
                 session_locked = False
                 current_track_id = None
                 resolved_art = None
+                was_silent_session = True
                 set_owntone_player("stop")
                 try:
                     with open(STATE_FILE, "w") as sf:
@@ -807,29 +799,25 @@ async def main():
                     pass
         else:
             # Signal detected (music playing)
-            was_silent_session = not is_playing or silence_counter >= max_silence_counts
-            silence_counter = 0
-
-            # Reconnect speakers marked for auto-connect if disconnected
-            reconnect_marked_speakers()
-
             if not is_playing:
                 is_playing = True
                 print(f"[AnalogAir] Needle drop detected! (RMS: {rms:.5f} >= {silence_thresh:.5f})", flush=True)
 
-                # Check if OwnTone was stopped/paused or disconnected during silence
                 ot_state, has_speakers = get_owntone_player_info()
                 print(f"[AnalogAir] Current OwnTone status on needle drop: state='{ot_state}', active_speakers={has_speakers}", flush=True)
 
-                # If OwnTone stopped due to speaker disconnect or was idle, purge stale FIFO queue and restart
-                if was_silent_session and (ot_state != "play" or not has_speakers):
-                    print("[AnalogAir] OwnTone was not actively streaming during silence period. Purging 30s buffer backlog to ensure near-instant real-time playback...", flush=True)
+                # Purge pipeline backlog and reconnect auto-connect speakers ONLY after extended silence or startup
+                if was_silent_session:
+                    print("[AnalogAir] Audio detected after extended silence. Purging 30s buffer backlog and reconnecting auto-connect speakers...", flush=True)
                     purge_pipeline_and_restart_owntone()
                     time.sleep(1.8)
-                    reconnect_marked_speakers()
+                    reconnect_auto_speakers()
+                    was_silent_session = False
                 
                 # Start or resume OwnTone stream
                 set_owntone_player("play")
+
+            silence_counter = 0
 
             # Check if Recognition is Disabled (No Recognition / Resource Saver Mode)
             if not enable_recognition:
