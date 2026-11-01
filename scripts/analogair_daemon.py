@@ -454,6 +454,65 @@ def get_owntone_player_info():
 
     return player_state, has_active_speakers
 
+LAST_SPEAKERS_FILE = "/tmp/analogair_last_speakers.json"
+
+def get_currently_selected_speakers():
+    """Returns dict of {output_id: volume} for all currently selected outputs in OwnTone."""
+    selected = {}
+    try:
+        r = requests.get("http://127.0.0.1:3689/api/outputs", timeout=2)
+        if r.status_code == 200:
+            for o in r.json().get("outputs", []):
+                if o.get("selected", False):
+                    selected[str(o.get("id"))] = int(o.get("volume", 100))
+    except Exception:
+        pass
+    if selected:
+        save_last_active_speakers(selected)
+    return selected
+
+def save_last_active_speakers(speakers_dict):
+    """Persists last active speaker state to /tmp/analogair_last_speakers.json and DB."""
+    try:
+        with open(LAST_SPEAKERS_FILE, "w") as f:
+            json.dump(speakers_dict, f)
+    except Exception:
+        pass
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("CREATE TABLE IF NOT EXISTS last_active_speakers (speaker_id TEXT PRIMARY KEY, volume INTEGER)")
+        c.execute("DELETE FROM last_active_speakers")
+        for sid, vol in speakers_dict.items():
+            c.execute("INSERT OR REPLACE INTO last_active_speakers (speaker_id, volume) VALUES (?, ?)", (str(sid), int(vol)))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+def get_last_active_speakers():
+    """Loads last active speakers from file or database."""
+    speakers = {}
+    try:
+        if os.path.exists(LAST_SPEAKERS_FILE):
+            with open(LAST_SPEAKERS_FILE, "r") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return {str(k): int(v) for k, v in data.items()}
+    except Exception:
+        pass
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("CREATE TABLE IF NOT EXISTS last_active_speakers (speaker_id TEXT PRIMARY KEY, volume INTEGER)")
+        c.execute("SELECT speaker_id, volume FROM last_active_speakers")
+        for row in c.fetchall():
+            speakers[str(row[0])] = int(row[1]) if row[1] is not None else 100
+        conn.close()
+    except Exception:
+        pass
+    return speakers
+
 def get_auto_connect_speaker_ids():
     """
     Retrieves speaker IDs marked specifically for auto-connect (auto_connect_speakers table).
@@ -493,6 +552,36 @@ def reconnect_auto_speakers():
     except Exception as e:
         print(f"[AnalogAir] Speaker auto-reconnect error: {e}", flush=True)
 
+def restore_speakers_after_purge(target_speakers=None):
+    """
+    Restores the exact speaker state that was active right before the purge,
+    even if the speaker is not set as an auto-connect.
+    If no speakers were active before the purge, falls back to reconnecting
+    designated auto-connect speakers.
+    """
+    targets = dict(target_speakers) if target_speakers else {}
+    if not targets:
+        targets = get_last_active_speakers()
+
+    restored_any = False
+    if targets:
+        try:
+            r_o = requests.get("http://127.0.0.1:3689/api/outputs", timeout=2)
+            if r_o.status_code == 200:
+                outputs = r_o.json().get("outputs", [])
+                for o in outputs:
+                    oid = str(o.get("id"))
+                    if oid in targets:
+                        vol = targets[oid]
+                        requests.put(f"http://127.0.0.1:3689/api/outputs/{oid}", json={"selected": True, "volume": vol}, timeout=2)
+                        print(f"[AnalogAir] Restored pre-purge selected speaker: {o.get('name')} (vol={vol})", flush=True)
+                        restored_any = True
+        except Exception as e:
+            print(f"[AnalogAir] Error restoring pre-purge speakers: {e}", flush=True)
+
+    if not restored_any:
+        reconnect_auto_speakers()
+
 def check_and_stop_owntone_if_no_speakers():
     """
     If OwnTone is running but disconnected from all speakers (e.g. user switched receiver
@@ -508,12 +597,18 @@ def check_and_stop_owntone_if_no_speakers():
         pass
     return False
 
-def purge_pipeline_and_restart_owntone():
+def purge_pipeline_and_restart_owntone(target_speakers=None):
     """
     Purges stale 30s FIFO pipe backlog and clears audio queues by restarting
     the user capture service and OwnTone system service.
+    Remembers and preserves active speaker selection.
     """
-    print("[AnalogAir] Purging audio buffer and restarting stream in real-time...", flush=True)
+    if target_speakers is None:
+        target_speakers = get_currently_selected_speakers()
+        if not target_speakers:
+            target_speakers = get_last_active_speakers()
+
+    print(f"[AnalogAir] Purging audio buffer and restarting stream in real-time (target speakers: {list(target_speakers.keys())})...", flush=True)
     try:
         subprocess.run(["systemctl", "--user", "restart", "analogair-capture.service"], timeout=5)
     except Exception as e:
@@ -522,6 +617,7 @@ def purge_pipeline_and_restart_owntone():
         subprocess.run(["sudo", "systemctl", "restart", "owntone.service"], timeout=8)
     except Exception as e:
         print(f"[AnalogAir] OwnTone restart error: {e}", flush=True)
+    return target_speakers
 
 def set_owntone_player(state="play"):
     """Starts or pauses OwnTone player."""
@@ -822,12 +918,15 @@ async def main():
                 ot_state, has_speakers = get_owntone_player_info()
                 print(f"[AnalogAir] Current OwnTone status on needle drop: state='{ot_state}', active_speakers={has_speakers}", flush=True)
 
-                # Purge pipeline backlog and reconnect auto-connect speakers ONLY after extended silence or startup
+                # Purge pipeline backlog and restore active speakers after extended silence or startup
                 if was_silent_session:
-                    print("[AnalogAir] Audio detected after extended silence. Purging 30s buffer backlog and reconnecting auto-connect speakers...", flush=True)
-                    purge_pipeline_and_restart_owntone()
+                    print("[AnalogAir] Audio detected after extended silence. Purging 30s buffer backlog and restoring active speakers...", flush=True)
+                    target_speakers = get_currently_selected_speakers()
+                    if not target_speakers:
+                        target_speakers = get_last_active_speakers()
+                    purge_pipeline_and_restart_owntone(target_speakers)
                     time.sleep(1.8)
-                    reconnect_auto_speakers()
+                    restore_speakers_after_purge(target_speakers)
                     was_silent_session = False
                 
                 # Start or resume OwnTone stream

@@ -1069,20 +1069,23 @@ app.post('/api/owntone/player/toggle', (req, res) => {
 
 // Purge audio backlog and resync stream
 app.post('/api/owntone/purge-buffer', (req, res) => {
-  if (db.autoConnectSpeakers && Array.isArray(db.autoConnectSpeakers)) {
-    for (const out of owntoneOutputs) {
-      if (db.autoConnectSpeakers.map(String).includes(String(out.id))) {
-        out.selected = true;
-        out.volume = 100;
-      }
+  // Preserve selected speakers from before purge, falling back to autoConnectSpeakers if none
+  const selectedBeforePurge = owntoneOutputs.filter(o => o.selected).map(o => String(o.id));
+  const toRestore = selectedBeforePurge.length > 0
+    ? selectedBeforePurge
+    : (Array.isArray(db.autoConnectSpeakers) ? db.autoConnectSpeakers.map(String) : []);
+
+  for (const out of owntoneOutputs) {
+    if (toRestore.includes(String(out.id))) {
+      out.selected = true;
     }
   }
   currentState.wasSilentSession = false;
-  res.json({ success: true, message: 'Audio backlog cleared and stream restarted.' });
+  res.json({ success: true, message: 'Audio backlog cleared and selected speakers restored.' });
 });
 
 // User Interaction Triggered Resync
-// Pre-arms OwnTone buffers & auto-connect speakers when user interacts with the web UI after silence
+// Pre-arms OwnTone buffers & restores selected speakers when user interacts with the web UI after silence
 let lastServerInteractionResync = 0;
 app.post('/api/interaction-resync', (req, res) => {
   const now = Date.now();
@@ -1094,18 +1097,20 @@ app.post('/api/interaction-resync', (req, res) => {
   }
 
   lastServerInteractionResync = now;
-  if (db.autoConnectSpeakers && Array.isArray(db.autoConnectSpeakers)) {
-    for (const out of owntoneOutputs) {
-      if (db.autoConnectSpeakers.map(String).includes(String(out.id))) {
-        out.selected = true;
-        out.volume = 100;
-      }
+  const selectedBeforePurge = owntoneOutputs.filter(o => o.selected).map(o => String(o.id));
+  const toRestore = selectedBeforePurge.length > 0
+    ? selectedBeforePurge
+    : (Array.isArray(db.autoConnectSpeakers) ? db.autoConnectSpeakers.map(String) : []);
+
+  for (const out of owntoneOutputs) {
+    if (toRestore.includes(String(out.id))) {
+      out.selected = true;
     }
   }
   currentState.wasSilentSession = false;
   res.json({ 
     resynced: true, 
-    message: 'Audio buffer purged and auto-connect speakers armed on user interaction.' 
+    message: 'Audio buffer purged and selected speakers armed on user interaction.' 
   });
 });
 

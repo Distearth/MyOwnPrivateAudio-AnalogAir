@@ -829,13 +829,87 @@ async def ensure_owntone_playing():
             print(f"[AnalogAir Web] ensure_owntone_playing: {e}", flush=True)
             return False
 
+LAST_SPEAKERS_FILE = Path("/tmp/analogair_last_speakers.json")
+
+def get_last_active_speakers():
+    """Loads last active speakers from file or database."""
+    speakers = {}
+    try:
+        if LAST_SPEAKERS_FILE.exists():
+            with open(LAST_SPEAKERS_FILE, "r") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return {str(k): int(v) for k, v in data.items()}
+    except Exception:
+        pass
+    try:
+        with get_db() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS last_active_speakers (speaker_id TEXT PRIMARY KEY, volume INTEGER)")
+            for row in conn.execute("SELECT speaker_id, volume FROM last_active_speakers"):
+                speakers[str(row["speaker_id"])] = int(row["volume"]) if row["volume"] is not None else 100
+    except Exception:
+        pass
+    return speakers
+
+def save_last_active_speakers(speakers_dict):
+    """Persists last active speaker state to file and DB."""
+    try:
+        with open(LAST_SPEAKERS_FILE, "w") as f:
+            json.dump(speakers_dict, f)
+    except Exception:
+        pass
+    try:
+        with get_db() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS last_active_speakers (speaker_id TEXT PRIMARY KEY, volume INTEGER)")
+            conn.execute("DELETE FROM last_active_speakers")
+            for sid, vol in speakers_dict.items():
+                conn.execute("INSERT OR REPLACE INTO last_active_speakers (speaker_id, volume) VALUES (?, ?)", (str(sid), int(vol)))
+            conn.commit()
+    except Exception:
+        pass
+
+def save_single_active_speaker(output_id, volume=100, active=True):
+    current = get_last_active_speakers()
+    oid = str(output_id)
+    if active:
+        current[oid] = int(volume)
+    else:
+        current.pop(oid, None)
+    save_last_active_speakers(current)
+
+def save_single_active_speaker_volume(output_id, volume):
+    current = get_last_active_speakers()
+    oid = str(output_id)
+    if oid in current:
+        current[oid] = int(volume)
+        save_last_active_speakers(current)
+
 async def purge_owntone_buffer(request):
     """
     Clears the accumulated 30s FIFO pipe and receiver delay by restarting the
     audio capture service and OwnTone service via passwordless sudo.
-    Restores active output playback instantly with real-time needle audio.
+    Remembers and restores the exact selected speakers active prior to the purge.
     """
-    print("[AnalogAir Web] Purge buffer requested. Restarting audio pipeline...", flush=True)
+    print("[AnalogAir Web] Purge buffer requested. Capturing active speaker state...", flush=True)
+
+    # 1. Capture currently selected speakers before restarting OwnTone
+    pre_purge_speakers = {}
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{OWNTONE_BASE}/api/outputs", timeout=2) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    for o in data.get("outputs", []):
+                        if o.get("selected", False):
+                            pre_purge_speakers[str(o.get("id"))] = int(o.get("volume", 100))
+    except Exception:
+        pass
+
+    if not pre_purge_speakers:
+        pre_purge_speakers = get_last_active_speakers()
+    else:
+        save_last_active_speakers(pre_purge_speakers)
+
     loop = asyncio.get_event_loop()
     
     def _restart_pipeline():
@@ -869,18 +943,11 @@ async def purge_owntone_buffer(request):
         except Exception:
             pass
 
-    # Allow OwnTone 1.5s to rebind sockets, then ensure marked auto-connect speakers and playback resume
+    # Allow OwnTone 1.5s to rebind sockets, then restore the exact speaker state from before the purge
     async def _post_restart_resume():
         await asyncio.sleep(1.8)
-        auto_ids = set()
-        with get_db() as conn:
-            try:
-                conn.execute("CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)")
-                for row in conn.execute("SELECT speaker_id FROM auto_connect_speakers"):
-                    auto_ids.add(str(row["speaker_id"]))
-            except Exception:
-                pass
-        if auto_ids:
+        restored_any = False
+        if pre_purge_speakers:
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=3) as resp:
@@ -888,10 +955,36 @@ async def purge_owntone_buffer(request):
                             data = await resp.json()
                             for o in data.get("outputs", []):
                                 oid = str(o.get("id"))
-                                if oid in auto_ids:
-                                    await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
+                                if oid in pre_purge_speakers:
+                                    vol = pre_purge_speakers[oid]
+                                    await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": vol}, timeout=2)
+                                    restored_any = True
+                                    print(f"[AnalogAir Web] Restored pre-purge selected speaker: {o.get('name')} (vol={vol})", flush=True)
             except Exception as err:
-                print(f"[AnalogAir Web] Post-purge speaker reconnect: {err}", flush=True)
+                print(f"[AnalogAir Web] Post-purge speaker restore: {err}", flush=True)
+
+        # Fallback to auto-connect speakers only if nothing was active before the purge
+        if not restored_any:
+            auto_ids = set()
+            with get_db() as conn:
+                try:
+                    conn.execute("CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)")
+                    for row in conn.execute("SELECT speaker_id FROM auto_connect_speakers"):
+                        auto_ids.add(str(row["speaker_id"]))
+                except Exception:
+                    pass
+            if auto_ids:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=3) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                for o in data.get("outputs", []):
+                                    oid = str(o.get("id"))
+                                    if oid in auto_ids:
+                                        await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
+                except Exception as err:
+                    print(f"[AnalogAir Web] Post-purge auto-speaker reconnect: {err}", flush=True)
 
         await ensure_owntone_playing()
 
@@ -904,8 +997,7 @@ async def handle_interaction_resync(request):
     """
     Triggered when the user interacts with the web interface in any way (click, tap, wake screen).
     If the system has been in silence / standby (was_silent_session is True or status == 'idle'),
-    this triggers the exact same resync purge and auto-connect speaker reconnection that
-    the next sound/needle drop would have caused.
+    this triggers the exact same resync purge and restores the last active speakers.
     """
     global LAST_RESYNC_TIME
     now = time.time()
@@ -931,6 +1023,24 @@ async def handle_interaction_resync(request):
         return web.json_response({"resynced": False, "reason": "already_playing"})
 
     LAST_RESYNC_TIME = now
+
+    # 1. Capture currently selected speakers before restarting OwnTone
+    pre_purge_speakers = {}
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{OWNTONE_BASE}/api/outputs", timeout=2) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    for o in data.get("outputs", []):
+                        if o.get("selected", False):
+                            pre_purge_speakers[str(o.get("id"))] = int(o.get("volume", 100))
+    except Exception:
+        pass
+
+    if not pre_purge_speakers:
+        pre_purge_speakers = get_last_active_speakers()
+    else:
+        save_last_active_speakers(pre_purge_speakers)
 
     loop = asyncio.get_running_loop()
     def _restart_pipeline():
@@ -965,15 +1075,8 @@ async def handle_interaction_resync(request):
 
     async def _post_restart_resume():
         await asyncio.sleep(1.8)
-        auto_ids = set()
-        with get_db() as conn:
-            try:
-                conn.execute("CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)")
-                for row in conn.execute("SELECT speaker_id FROM auto_connect_speakers"):
-                    auto_ids.add(str(row["speaker_id"]))
-            except Exception:
-                pass
-        if auto_ids:
+        restored_any = False
+        if pre_purge_speakers:
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=3) as resp:
@@ -981,18 +1084,43 @@ async def handle_interaction_resync(request):
                             data = await resp.json()
                             for o in data.get("outputs", []):
                                 oid = str(o.get("id"))
-                                if oid in auto_ids:
-                                    await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
+                                if oid in pre_purge_speakers:
+                                    vol = pre_purge_speakers[oid]
+                                    await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": vol}, timeout=2)
+                                    restored_any = True
+                                    print(f"[AnalogAir Web] Restored pre-purge selected speaker on interaction: {o.get('name')} (vol={vol})", flush=True)
             except Exception as err:
-                print(f"[AnalogAir Web] Post-interaction speaker reconnect: {err}", flush=True)
+                print(f"[AnalogAir Web] Post-interaction speaker restore error: {err}", flush=True)
+
+        if not restored_any:
+            auto_ids = set()
+            with get_db() as conn:
+                try:
+                    conn.execute("CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)")
+                    for row in conn.execute("SELECT speaker_id FROM auto_connect_speakers"):
+                        auto_ids.add(str(row["speaker_id"]))
+                except Exception:
+                    pass
+            if auto_ids:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=3) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                for o in data.get("outputs", []):
+                                    oid = str(o.get("id"))
+                                    if oid in auto_ids:
+                                        await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
+                except Exception as err:
+                    print(f"[AnalogAir Web] Post-interaction speaker reconnect: {err}", flush=True)
 
         await ensure_owntone_playing()
 
     asyncio.create_task(_post_restart_resume())
-    print("[AnalogAir Web] User interaction triggered resync purge while idle. Buffer cleared & auto-connect speakers armed.", flush=True)
+    print("[AnalogAir Web] User interaction triggered resync purge while idle. Buffer cleared & selected speakers reattached.", flush=True)
     return web.json_response({
         "resynced": True,
-        "message": "Audio buffer purged and auto-connect speakers armed on user interaction."
+        "message": "Audio buffer purged and selected speakers reattached on user interaction."
     })
 
 async def get_owntone_player(request):
@@ -1088,6 +1216,7 @@ async def toggle_owntone_output(request):
                         async with session.put(f"{OWNTONE_BASE}/api/outputs/{output_id}", json=payload, timeout=2) as r2:
                             if r2.status == 200:
                                 res_data = await r2.json()
+                                save_single_active_speaker(str(output_id), 100, active=new_state)
                                 if new_state:
                                     # Speaker selected: make sure OwnTone starts playing the stream if paused or stopped
                                     asyncio.create_task(ensure_owntone_playing())
@@ -1105,6 +1234,7 @@ async def set_owntone_output_volume(request):
             async with session.put(f"{OWNTONE_BASE}/api/outputs/{output_id}", json={"volume": vol}, timeout=2) as resp:
                 if resp.status == 200:
                     res_data = await resp.json()
+                    save_single_active_speaker_volume(str(output_id), vol)
                     return web.json_response({"output": res_data})
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)

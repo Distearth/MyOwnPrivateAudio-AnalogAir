@@ -205,7 +205,7 @@ export default function App() {
         method: 'POST'
       });
       if (res?.resynced) {
-        setResyncNotice('Audio buffer purged & auto-connect speakers armed for vinyl');
+        setResyncNotice(res.message || 'Audio buffer purged & speakers armed for vinyl');
         setTimeout(() => setResyncNotice(null), 4000);
         setTimeout(() => {
           fetchOutputs();

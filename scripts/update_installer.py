@@ -238,6 +238,7 @@ c = conn.cursor()
 c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
 c.execute('CREATE TABLE IF NOT EXISTS favorite_speakers (speaker_id TEXT PRIMARY KEY)')
 c.execute('CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)')
+c.execute('CREATE TABLE IF NOT EXISTS last_active_speakers (speaker_id TEXT PRIMARY KEY, volume INTEGER)')
 c.execute('CREATE TABLE IF NOT EXISTS overrides (key TEXT PRIMARY KEY, artist TEXT, album TEXT, title TEXT, art_url TEXT)')
 settings = {{
     'audio_device': '$CONF_AUDIO_DEV',
