@@ -15,6 +15,8 @@ export interface NowPlayingState {
   inputDeviceName: string;
   matchedVia?: 'local_override' | 'musicbrainz' | 'shazam' | 'idle_default';
   startedAt?: string;
+  wasSilentSession?: boolean;
+  silenceDurationSeconds?: number;
 }
 
 export interface ToneControls {

@@ -264,6 +264,8 @@ interface ServerState {
   inputDeviceName: string;
   matchedVia: 'local_override' | 'musicbrainz' | 'shazam' | 'idle_default';
   startedAt: string;
+  wasSilentSession?: boolean;
+  silenceDurationSeconds?: number;
 }
 
 // Current Now Playing State (Default No Recognition / Resource Saver Mode)
@@ -282,7 +284,9 @@ let currentState: ServerState = {
   bitDepth: 16,
   inputDeviceName: 'USB Audio CODEC (Turntable Preamp USB)',
   matchedVia: 'idle_default',
-  startedAt: new Date(Date.now() - 145000).toISOString()
+  startedAt: new Date(Date.now() - 145000).toISOString(),
+  wasSilentSession: false,
+  silenceDurationSeconds: 0
 };
 
 // Mirror album art to OwnTone source directory (AnalogAir.jpg)
@@ -1073,7 +1077,36 @@ app.post('/api/owntone/purge-buffer', (req, res) => {
       }
     }
   }
+  currentState.wasSilentSession = false;
   res.json({ success: true, message: 'Audio backlog cleared and stream restarted.' });
+});
+
+// User Interaction Triggered Resync
+// Pre-arms OwnTone buffers & auto-connect speakers when user interacts with the web UI after silence
+let lastServerInteractionResync = 0;
+app.post('/api/interaction-resync', (req, res) => {
+  const now = Date.now();
+  if (currentState.status === 'playing') {
+    return res.json({ resynced: false, reason: 'already_playing' });
+  }
+  if (now - lastServerInteractionResync < 30000) {
+    return res.json({ resynced: false, reason: 'cooldown' });
+  }
+
+  lastServerInteractionResync = now;
+  if (db.autoConnectSpeakers && Array.isArray(db.autoConnectSpeakers)) {
+    for (const out of owntoneOutputs) {
+      if (db.autoConnectSpeakers.map(String).includes(String(out.id))) {
+        out.selected = true;
+        out.volume = 100;
+      }
+    }
+  }
+  currentState.wasSilentSession = false;
+  res.json({ 
+    resynced: true, 
+    message: 'Audio buffer purged and auto-connect speakers armed on user interaction.' 
+  });
 });
 
 // Proxy route for background live audio stream

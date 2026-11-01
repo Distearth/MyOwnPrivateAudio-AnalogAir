@@ -226,6 +226,8 @@ async def get_state(request):
         "inputDeviceName": "AnalogAir Vinyl (PipeWire Capture)",
         "matchedVia": matched_via,
         "startedAt": state.get("startedAt", ""),
+        "wasSilentSession": state.get("was_silent_session", True if status == "idle" else False),
+        "silenceDurationSeconds": int(time.time() - state.get("silence_start_time", time.time())) if (status == "idle" and state.get("silence_start_time")) else 0,
         "tone": {
             "inputGainDb": float(settings.get("input_gain_db", 0)),
             "bassGainDb": float(settings.get("bass_gain_db", 1.5)),
@@ -850,6 +852,23 @@ async def purge_owntone_buffer(request):
 
     await loop.run_in_executor(None, _restart_pipeline)
 
+    # Signal daemon that resync was performed
+    try:
+        Path("/tmp/analogair_web_resync").touch()
+    except Exception:
+        pass
+
+    if STATE_FILE.exists():
+        try:
+            with open(STATE_FILE, "r") as f:
+                st = json.load(f)
+            st["was_silent_session"] = False
+            st["last_resync_at"] = time.time()
+            with open(STATE_FILE, "w") as f:
+                json.dump(st, f)
+        except Exception:
+            pass
+
     # Allow OwnTone 1.5s to rebind sockets, then ensure marked auto-connect speakers and playback resume
     async def _post_restart_resume():
         await asyncio.sleep(1.8)
@@ -878,6 +897,103 @@ async def purge_owntone_buffer(request):
 
     asyncio.create_task(_post_restart_resume())
     return web.json_response({"success": True, "message": "Stream restarted in real-time."})
+
+LAST_RESYNC_TIME = 0
+
+async def handle_interaction_resync(request):
+    """
+    Triggered when the user interacts with the web interface in any way (click, tap, wake screen).
+    If the system has been in silence / standby (was_silent_session is True or status == 'idle'),
+    this triggers the exact same resync purge and auto-connect speaker reconnection that
+    the next sound/needle drop would have caused.
+    """
+    global LAST_RESYNC_TIME
+    now = time.time()
+
+    # Debounce / rate limit: do not execute if a resync occurred in the past 30 seconds
+    if now - LAST_RESYNC_TIME < 30:
+        return web.json_response({"resynced": False, "reason": "cooldown"})
+
+    # Check state file to ensure music isn't actively playing
+    is_playing = False
+    was_silent = True
+    if STATE_FILE.exists():
+        try:
+            with open(STATE_FILE, "r") as f:
+                st = json.load(f)
+                if st.get("status") == "playing":
+                    is_playing = True
+                was_silent = st.get("was_silent_session", True)
+        except Exception:
+            pass
+
+    if is_playing:
+        return web.json_response({"resynced": False, "reason": "already_playing"})
+
+    LAST_RESYNC_TIME = now
+
+    loop = asyncio.get_running_loop()
+    def _restart_pipeline():
+        try:
+            subprocess.run(["systemctl", "--user", "restart", "analogair-capture.service"], timeout=5)
+        except Exception as e:
+            print(f"[AnalogAir Web] Interaction capture restart error: {e}", flush=True)
+        try:
+            subprocess.run(["sudo", "systemctl", "restart", "owntone.service"], timeout=8)
+        except Exception as e:
+            print(f"[AnalogAir Web] Interaction owntone restart error: {e}", flush=True)
+
+    await loop.run_in_executor(None, _restart_pipeline)
+
+    # Touch signal file so daemon knows was_silent_session is resolved
+    try:
+        Path("/tmp/analogair_web_resync").touch()
+    except Exception:
+        pass
+
+    # Update STATE_FILE to clear was_silent_session
+    if STATE_FILE.exists():
+        try:
+            with open(STATE_FILE, "r") as f:
+                st = json.load(f)
+            st["was_silent_session"] = False
+            st["last_resync_at"] = now
+            with open(STATE_FILE, "w") as f:
+                json.dump(st, f)
+        except Exception:
+            pass
+
+    async def _post_restart_resume():
+        await asyncio.sleep(1.8)
+        auto_ids = set()
+        with get_db() as conn:
+            try:
+                conn.execute("CREATE TABLE IF NOT EXISTS auto_connect_speakers (speaker_id TEXT PRIMARY KEY)")
+                for row in conn.execute("SELECT speaker_id FROM auto_connect_speakers"):
+                    auto_ids.add(str(row["speaker_id"]))
+            except Exception:
+                pass
+        if auto_ids:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=3) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            for o in data.get("outputs", []):
+                                oid = str(o.get("id"))
+                                if oid in auto_ids:
+                                    await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
+            except Exception as err:
+                print(f"[AnalogAir Web] Post-interaction speaker reconnect: {err}", flush=True)
+
+        await ensure_owntone_playing()
+
+    asyncio.create_task(_post_restart_resume())
+    print("[AnalogAir Web] User interaction triggered resync purge while idle. Buffer cleared & auto-connect speakers armed.", flush=True)
+    return web.json_response({
+        "resynced": True,
+        "message": "Audio buffer purged and auto-connect speakers armed on user interaction."
+    })
 
 async def get_owntone_player(request):
     """Returns current OwnTone player state."""
@@ -1900,6 +2016,7 @@ def main():
     app.router.add_post('/api/owntone/player/play', start_owntone_player)
     app.router.add_post('/api/owntone/player/toggle', start_owntone_player)
     app.router.add_post('/api/owntone/purge-buffer', purge_owntone_buffer)
+    app.router.add_post('/api/interaction-resync', handle_interaction_resync)
     app.router.add_get('/stream.mp3', stream_owntone_mp3)
     app.router.add_get('/api/stream.mp3', stream_owntone_mp3)
 

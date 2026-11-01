@@ -721,6 +721,8 @@ async def main():
     write_to_pipe(make_xml(idle_title, idle_artist, idle_album))
     print("[AnalogAir] Daemon running with PipeWire audio monitoring.", flush=True)
 
+    silence_start_time = time.time()
+
     # Initial state
     try:
         with open(STATE_FILE, "w") as sf:
@@ -730,7 +732,9 @@ async def main():
                 "album": idle_album,
                 "title": idle_title,
                 "art_url": "/api/artwork/custom-standby.jpg",
-                "rms": 0.0
+                "rms": 0.0,
+                "was_silent_session": True,
+                "silence_start_time": silence_start_time
             }, sf)
     except Exception:
         pass
@@ -740,6 +744,15 @@ async def main():
     last_title = idle_title
 
     while True:
+        # Check if user interaction in web interface triggered the resync while silent
+        if os.path.exists("/tmp/analogair_web_resync"):
+            try:
+                os.remove("/tmp/analogair_web_resync")
+            except Exception:
+                pass
+            print("[AnalogAir] Web interface interaction triggered resync purge while idle. Auto-connect speakers pre-armed.", flush=True)
+            was_silent_session = False
+
         enable_recognition = get_setting("enable_recognition", "false").lower() == "true"
         continuous_mode = get_setting("continuous_id", "false").lower() == "true"
         silence_timeout_sec = int(get_setting("silence_gap", "15"))
@@ -767,6 +780,7 @@ async def main():
                 current_track_id = None
                 resolved_art = None
                 was_silent_session = True
+                silence_start_time = time.time()
                 set_owntone_player("stop")
                 try:
                     with open(STATE_FILE, "w") as sf:
@@ -777,7 +791,9 @@ async def main():
                             "title": idle_title,
                             "art_url": "",
                             "rms": float(rms),
-                            "matched_via": "idle_default"
+                            "matched_via": "idle_default",
+                            "was_silent_session": True,
+                            "silence_start_time": silence_start_time
                         }, sf)
                 except Exception:
                     pass

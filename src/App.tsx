@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { NowPlayingDisplay } from './components/NowPlayingDisplay';
 import { ControlsOverlay } from './components/ControlsOverlay';
 import { MetadataEditorModal } from './components/MetadataEditorModal';
@@ -79,25 +80,13 @@ export default function App() {
   const [controlsTab, setControlsTab] = useState<'quick' | 'tone' | 'speakers' | 'history' | 'update' | 'settings'>('quick');
   const [isMetadataEditorOpen, setIsMetadataEditorOpen] = useState(false);
   const [lastActivityTimestamp, setLastActivityTimestamp] = useState<number>(Date.now());
+  const [resyncNotice, setResyncNotice] = useState<string | null>(null);
 
-  // Track user interaction to reset OLED burn-in dimmer timer
-  const recordActivity = useCallback(() => {
-    setLastActivityTimestamp(Date.now());
-  }, []);
-
+  // Keep a reference to current state for non-stale callbacks
+  const stateRef = useRef(state);
   useEffect(() => {
-    window.addEventListener('mousemove', recordActivity);
-    window.addEventListener('mousedown', recordActivity);
-    window.addEventListener('touchstart', recordActivity);
-    window.addEventListener('keydown', recordActivity);
-
-    return () => {
-      window.removeEventListener('mousemove', recordActivity);
-      window.removeEventListener('mousedown', recordActivity);
-      window.removeEventListener('touchstart', recordActivity);
-      window.removeEventListener('keydown', recordActivity);
-    };
-  }, [recordActivity]);
+    stateRef.current = state;
+  }, [state]);
 
   // Fetch full status
   const fetchState = useCallback(async () => {
@@ -120,7 +109,9 @@ export default function App() {
       bitDepth: data.bitDepth ?? defaultState.bitDepth,
       inputDeviceName: data.inputDeviceName || defaultState.inputDeviceName,
       matchedVia: data.matchedVia || defaultState.matchedVia,
-      startedAt: data.startedAt || defaultState.startedAt
+      startedAt: data.startedAt || defaultState.startedAt,
+      wasSilentSession: data.wasSilentSession,
+      silenceDurationSeconds: data.silenceDurationSeconds
     });
     if (data.tone) {
       setTone(prev => ({ ...prev, ...data.tone }));
@@ -197,6 +188,63 @@ export default function App() {
       setSessions(data.sessions);
     }
   }, []);
+
+  // Trigger resync and pre-arm auto-connect speakers when user interacts after silence
+  const lastInteractionResyncRef = useRef<number>(0);
+  const checkAndTriggerInteractionResync = useCallback(async () => {
+    // Never interrupt active music playback
+    if (stateRef.current.status === 'playing') return;
+
+    const now = Date.now();
+    // Debounce to at most once every 30 seconds
+    if (now - lastInteractionResyncRef.current < 30000) return;
+    lastInteractionResyncRef.current = now;
+
+    try {
+      const res = await safeJsonFetch<{ resynced: boolean; message?: string }>('/api/interaction-resync', {
+        method: 'POST'
+      });
+      if (res?.resynced) {
+        setResyncNotice('Audio buffer purged & auto-connect speakers armed for vinyl');
+        setTimeout(() => setResyncNotice(null), 4000);
+        setTimeout(() => {
+          fetchOutputs();
+          fetchState();
+        }, 1800);
+      }
+    } catch {
+      // Ignore network errors
+    }
+  }, [fetchOutputs, fetchState]);
+
+  // Track user interaction to reset OLED burn-in dimmer and trigger resync if idle
+  const recordActivity = useCallback(() => {
+    setLastActivityTimestamp(Date.now());
+    checkAndTriggerInteractionResync();
+  }, [checkAndTriggerInteractionResync]);
+
+  useEffect(() => {
+    window.addEventListener('mousemove', recordActivity);
+    window.addEventListener('mousedown', recordActivity);
+    window.addEventListener('touchstart', recordActivity);
+    window.addEventListener('keydown', recordActivity);
+    window.addEventListener('click', recordActivity);
+    window.addEventListener('focus', recordActivity);
+    document.addEventListener('visibilitychange', recordActivity);
+
+    // Initial check upon page load/mount
+    checkAndTriggerInteractionResync();
+
+    return () => {
+      window.removeEventListener('mousemove', recordActivity);
+      window.removeEventListener('mousedown', recordActivity);
+      window.removeEventListener('touchstart', recordActivity);
+      window.removeEventListener('keydown', recordActivity);
+      window.removeEventListener('click', recordActivity);
+      window.removeEventListener('focus', recordActivity);
+      document.removeEventListener('visibilitychange', recordActivity);
+    };
+  }, [recordActivity, checkAndTriggerInteractionResync]);
 
   // Polling loop
   useEffect(() => {
@@ -434,6 +482,16 @@ export default function App() {
         currentTrackKey={`${state.artist} - ${state.album}`}
         onWake={recordActivity}
       />
+
+      {/* 5. Pre-Arm Resync Floating Notification */}
+      {resyncNotice && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[150] pointer-events-none animate-in fade-in slide-in-from-top-3 duration-300">
+          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-neutral-900/95 border border-amber-500/40 text-amber-300 text-xs font-semibold shadow-2xl backdrop-blur-md">
+            <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+            <span>{resyncNotice}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
