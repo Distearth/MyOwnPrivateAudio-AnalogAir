@@ -21,9 +21,21 @@ echo -e "${CYAN}========================================================${NC}"
 
 # 1. Stop active AnalogAir user services to avoid file locks and pipe collisions
 echo ""
-echo -e "${YELLOW}[1/4] Stopping background services...${NC}"
+echo -e "${YELLOW}[1/4] Stopping background services and clearing network locks...${NC}"
 systemctl --user stop analogair-capture.service analogair-daemon.service analogair-web.service 2>/dev/null || true
-echo "Services stopped safely."
+
+# Clean up any obsolete speaker_autoselect in /etc/owntone.conf that blocks OwnTone startup
+sudo sed -i '/speaker_autoselect/d' /etc/owntone.conf 2>/dev/null || true
+
+# Clear any lingering pre-shutdown iptables drop rules or lock files
+sudo iptables -D OUTPUT -j DROP 2>/dev/null || true
+sudo ip6tables -D OUTPUT -j DROP 2>/dev/null || true
+sudo rm -f /tmp/analogair-pre-shutdown.pid 2>/dev/null || true
+
+# Ensure Avahi (mDNS / Bonjour) is running so AirPlay speakers can be discovered
+sudo systemctl restart avahi-daemon 2>/dev/null || true
+sudo systemctl restart owntone 2>/dev/null || true
+echo "Services stopped safely and network filters cleared."
 
 # 2. Pull down a clean copy of the folder from GitHub
 echo ""
@@ -51,6 +63,8 @@ chmod +x ./install.sh ./update.sh
 # 4. Reload systemd daemon and restart services
 echo ""
 echo -e "${YELLOW}[4/4] Reloading systemd and restarting services...${NC}"
+sudo systemctl restart avahi-daemon 2>/dev/null || true
+sudo systemctl restart owntone 2>/dev/null || true
 systemctl --user daemon-reload
 systemctl --user restart analogair-capture.service analogair-daemon.service analogair-web.service
 

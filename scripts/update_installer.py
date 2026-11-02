@@ -200,11 +200,19 @@ library {{
 
 audio {{
 	nickname = "AnalogAir Streamer"
-	speaker_autoselect = no
 }}
 CONFEOF
 
-echo "Restarting OwnTone service with updated configuration..."
+# Clean up any obsolete speaker_autoselect directive and clear any lingering drop rules
+sudo sed -i '/speaker_autoselect/d' /etc/owntone.conf 2>/dev/null || true
+sudo iptables -D OUTPUT -j DROP 2>/dev/null || true
+sudo ip6tables -D OUTPUT -j DROP 2>/dev/null || true
+sudo rm -f /tmp/analogair-pre-shutdown.pid 2>/dev/null || true
+
+# Ensure Avahi (mDNS / Bonjour) and OwnTone services are active and running
+echo "Ensuring Avahi (mDNS) and OwnTone services are running..."
+sudo systemctl restart avahi-daemon 2>/dev/null || true
+sudo systemctl enable avahi-daemon owntone 2>/dev/null || true
 sudo systemctl restart owntone
 
 # 6. Create Named Pipes & Virtual Audio Engine

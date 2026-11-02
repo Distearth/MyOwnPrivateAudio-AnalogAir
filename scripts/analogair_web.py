@@ -84,7 +84,44 @@ def sanitize_track_title(title: str) -> str:
 
 IS_SHUTTING_DOWN = False
 
+def heal_system_services():
+    """Restores OwnTone and Avahi services, removes obsolete config lines, and clears network blocks."""
+    try:
+        conf_p = Path("/etc/owntone.conf")
+        if conf_p.exists():
+            content = conf_p.read_text(encoding="utf-8")
+            if "speaker_autoselect" in content:
+                clean_lines = [l for l in content.splitlines() if "speaker_autoselect" not in l]
+                subprocess.run(
+                    ["sudo", "tee", "/etc/owntone.conf"],
+                    input=("\n".join(clean_lines) + "\n").encode("utf-8"),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2
+                )
+                subprocess.run(["sudo", "systemctl", "restart", "owntone"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
+    except Exception:
+        pass
+
+    try:
+        subprocess.run(["sudo", "iptables", "-D", "OUTPUT", "-j", "DROP"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1)
+        subprocess.run(["sudo", "ip6tables", "-D", "OUTPUT", "-j", "DROP"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1)
+        p = Path("/tmp/analogair-pre-shutdown.pid")
+        if p.exists():
+            p.unlink()
+    except Exception:
+        pass
+
+    try:
+        res = subprocess.run(["systemctl", "is-active", "owntone"], stdout=subprocess.PIPE, text=True, timeout=1)
+        if res.stdout.strip() != "active":
+            subprocess.run(["sudo", "systemctl", "start", "avahi-daemon"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            subprocess.run(["sudo", "systemctl", "restart", "owntone"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
+    except Exception:
+        pass
+
 def init_db():
+    heal_system_services()
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with get_db() as conn:
         c = conn.cursor()
@@ -695,23 +732,27 @@ async def get_owntone_outputs(request):
             pass
 
     async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=2) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    outputs = data.get("outputs", [])
-                    for o in outputs:
-                        oid = str(o.get("id"))
-                        o["id"] = oid
-                        o["isFavorite"] = oid in fav_ids
-                        o["autoConnect"] = oid in auto_ids
-                    return web.json_response({
-                        "outputs": outputs,
-                        "favoriteSpeakers": list(fav_ids),
-                        "autoConnectSpeakers": list(auto_ids)
-                    })
-        except Exception:
-            pass
+        for attempt in range(2):
+            try:
+                async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=2.5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        outputs = data.get("outputs", [])
+                        for o in outputs:
+                            oid = str(o.get("id"))
+                            o["id"] = oid
+                            o["isFavorite"] = oid in fav_ids
+                            o["autoConnect"] = oid in auto_ids
+                        return web.json_response({
+                            "outputs": outputs,
+                            "favoriteSpeakers": list(fav_ids),
+                            "autoConnectSpeakers": list(auto_ids)
+                        })
+            except Exception:
+                if attempt == 0:
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(None, heal_system_services)
+                    await asyncio.sleep(0.5)
     return web.json_response({
         "outputs": [],
         "favoriteSpeakers": list(fav_ids),
