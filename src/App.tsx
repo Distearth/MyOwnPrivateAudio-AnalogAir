@@ -4,6 +4,7 @@ import { NowPlayingDisplay } from './components/NowPlayingDisplay';
 import { ControlsOverlay } from './components/ControlsOverlay';
 import { MetadataEditorModal } from './components/MetadataEditorModal';
 import { ScreenDimmer } from './components/ScreenDimmer';
+import { ResetOverlay } from './components/ResetOverlay';
 import {
   NowPlayingState,
   ToneControls,

@@ -55,6 +55,46 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 DEFAULT_SILENCE_THRESHOLD = 0.0025
 CHECK_INTERVAL = 4
 
+ACTIVITY_FILE = "/tmp/analogair_activity.json"
+AUTO_PURGE_IDLE_SECONDS = 7200  # 2 hours
+
+def record_activity(source="audio"):
+    """Records timestamp of audio activity or web interaction to evaluate the 2-hour idle threshold."""
+    now = time.time()
+    data = {"last_audio_time": now, "last_web_time": now, "last_active_time": now}
+    try:
+        if os.path.exists(ACTIVITY_FILE):
+            with open(ACTIVITY_FILE, "r") as f:
+                d = json.load(f)
+                if isinstance(d, dict):
+                    data.update(d)
+    except Exception:
+        pass
+    if source == "audio":
+        data["last_audio_time"] = now
+    elif source == "web":
+        data["last_web_time"] = now
+    data["last_active_time"] = max(float(data.get("last_audio_time", 0)), float(data.get("last_web_time", 0)))
+    try:
+        with open(ACTIVITY_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+def get_idle_duration():
+    """Returns number of seconds elapsed since last audio or web interface interaction."""
+    now = time.time()
+    try:
+        if os.path.exists(ACTIVITY_FILE):
+            with open(ACTIVITY_FILE, "r") as f:
+                d = json.load(f)
+                last_time = max(float(d.get("last_audio_time", 0)), float(d.get("last_web_time", 0)))
+                if last_time > 0:
+                    return max(0.0, now - last_time)
+    except Exception:
+        pass
+    return 0.0
+
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -788,6 +828,7 @@ def compute_wav_rms(wav_path):
 
 async def main():
     init_db()
+    record_activity("audio")
     shazam = Shazam()
     is_playing = False
     session_locked = False
@@ -897,25 +938,56 @@ async def main():
                     pass
         else:
             # Signal detected (music playing)
+            record_activity("audio")
             if not is_playing:
                 is_playing = True
-                print(f"[AnalogAir] Needle drop detected! (RMS: {rms:.5f} >= {silence_thresh:.5f})", flush=True)
+                idle_sec = get_idle_duration()
+                print(f"[AnalogAir] Needle drop detected! (RMS: {rms:.5f} >= {silence_thresh:.5f}) | Inactivity duration: {int(idle_sec)}s", flush=True)
 
                 ot_state, has_speakers = get_owntone_player_info()
                 print(f"[AnalogAir] Current OwnTone status on needle drop: state='{ot_state}', active_speakers={has_speakers}", flush=True)
 
-                # Purge pipeline backlog and restore active speakers after extended silence or startup
-                if was_silent_session:
-                    print("[AnalogAir] Audio detected after extended silence. Purging 30s buffer backlog and restoring active speakers...", flush=True)
+                # Purge pipeline backlog and restore active speakers ONLY after 2 hours (7200s) of inactivity
+                if was_silent_session and idle_sec >= AUTO_PURGE_IDLE_SECONDS:
+                    print(f"[AnalogAir] Audio detected after {int(idle_sec)}s inactivity (>= 2 hours). Purging 30s buffer backlog, restarting OwnTone, and reconnecting auto-connect speakers...", flush=True)
+                    # Notify web clients via STATE_FILE that resync is in progress
+                    try:
+                        with open(STATE_FILE, "r") as sf:
+                            st = json.load(sf)
+                    except Exception:
+                        st = {}
+                    st["is_resyncing"] = True
+                    st["resync_message"] = "2 hours of silence & inactivity detected. Resetting OwnTone audio pipeline and reconnecting auto-connect speakers..."
+                    try:
+                        with open(STATE_FILE, "w") as sf:
+                            json.dump(st, sf)
+                    except Exception:
+                        pass
+
                     target_speakers = get_currently_selected_speakers()
                     if not target_speakers:
                         target_speakers = get_last_active_speakers()
                     purge_pipeline_and_restart_owntone(target_speakers)
-                    time.sleep(1.8)
+                    time.sleep(2.0)
                     restore_speakers_after_purge(target_speakers)
                     was_silent_session = False
-                
-                # Start or resume OwnTone stream
+
+                    # Clear resync state
+                    try:
+                        with open(STATE_FILE, "r") as sf:
+                            st = json.load(sf)
+                        st["is_resyncing"] = False
+                        st.pop("resync_message", None)
+                        with open(STATE_FILE, "w") as sf:
+                            json.dump(st, sf)
+                    except Exception:
+                        pass
+                else:
+                    if was_silent_session:
+                        print(f"[AnalogAir] Audio resumed after {int(idle_sec)}s idle (< 2 hours). Continuing stream without OwnTone restart.", flush=True)
+                    was_silent_session = False
+
+                record_activity("audio")
                 set_owntone_player("play")
 
             silence_counter = 0

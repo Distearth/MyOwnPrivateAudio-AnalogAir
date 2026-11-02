@@ -83,6 +83,47 @@ def sanitize_track_title(title: str) -> str:
     return cleaned if cleaned else title
 
 IS_SHUTTING_DOWN = False
+ACTIVITY_FILE = Path("/tmp/analogair_activity.json")
+AUTO_PURGE_IDLE_SECONDS = 7200  # 2 hours
+IS_RESYNCING = False
+RESYNC_MESSAGE = ""
+
+def record_activity(source="web"):
+    """Records timestamp of audio activity or web interaction to evaluate the 2-hour idle threshold."""
+    now = time.time()
+    data = {"last_audio_time": now, "last_web_time": now, "last_active_time": now}
+    try:
+        if ACTIVITY_FILE.exists():
+            with open(ACTIVITY_FILE, "r") as f:
+                d = json.load(f)
+                if isinstance(d, dict):
+                    data.update(d)
+    except Exception:
+        pass
+    if source == "audio":
+        data["last_audio_time"] = now
+    elif source == "web":
+        data["last_web_time"] = now
+    data["last_active_time"] = max(float(data.get("last_audio_time", 0)), float(data.get("last_web_time", 0)))
+    try:
+        with open(ACTIVITY_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+def get_idle_duration():
+    """Returns number of seconds elapsed since last audio or web interface interaction."""
+    now = time.time()
+    try:
+        if ACTIVITY_FILE.exists():
+            with open(ACTIVITY_FILE, "r") as f:
+                d = json.load(f)
+                last_time = max(float(d.get("last_audio_time", 0)), float(d.get("last_web_time", 0)))
+                if last_time > 0:
+                    return max(0.0, now - last_time)
+    except Exception:
+        pass
+    return 0.0
 
 def heal_system_services():
     """Restores OwnTone and Avahi services, removes obsolete config lines, and clears network blocks."""
@@ -250,6 +291,10 @@ async def get_state(request):
             v_tag = int(LIVE_ART_PATH.stat().st_mtime) if LIVE_ART_PATH.exists() else int(time.time())
             art_url = f"/api/artwork/current.jpg?v={v_tag}"
 
+    idle_duration = get_idle_duration()
+    is_resyncing = bool(state.get("is_resyncing", False) or IS_RESYNCING)
+    resync_msg = state.get("resync_message", "") or RESYNC_MESSAGE
+
     return web.json_response({
         "status": status,
         "artist": artist,
@@ -268,6 +313,10 @@ async def get_state(request):
         "startedAt": state.get("startedAt", ""),
         "wasSilentSession": state.get("was_silent_session", True if status == "idle" else False),
         "silenceDurationSeconds": int(time.time() - state.get("silence_start_time", time.time())) if (status == "idle" and state.get("silence_start_time")) else 0,
+        "idleSeconds": round(idle_duration, 1),
+        "idleExceeded2Hours": idle_duration >= AUTO_PURGE_IDLE_SECONDS,
+        "isResyncing": is_resyncing,
+        "resyncMessage": resync_msg,
         "tone": {
             "inputGainDb": float(settings.get("input_gain_db", 0)),
             "bassGainDb": float(settings.get("bass_gain_db", 1.5)),
@@ -1021,39 +1070,77 @@ async def purge_owntone_buffer(request):
 
 LAST_RESYNC_TIME = 0
 
+async def handle_interaction_ping(request):
+    """Pings web interaction timestamp to refresh the 2-hour inactivity counter."""
+    record_activity("web")
+    idle_sec = get_idle_duration()
+    return web.json_response({
+        "success": True,
+        "idleSeconds": round(idle_sec, 1),
+        "idleExceeded2Hours": idle_sec >= AUTO_PURGE_IDLE_SECONDS
+    })
+
 async def handle_interaction_resync(request):
     """
-    Triggered when the user interacts with the web interface in any way (click, tap, wake screen).
-    If the system has been in silence / standby (was_silent_session is True or status == 'idle'),
-    this triggers the exact same resync purge and restores the last active speakers.
+    Triggered when the user interacts with the web interface.
+    Only executes auto purge & restart of OwnTone if >= 2 hours of inactivity (no audio AND no web interaction),
+    or if explicitly forced.
     """
-    global LAST_RESYNC_TIME, IS_SHUTTING_DOWN
+    global LAST_RESYNC_TIME, IS_SHUTTING_DOWN, IS_RESYNCING, RESYNC_MESSAGE
     if IS_SHUTTING_DOWN:
         return web.json_response({"resynced": False, "reason": "shutting_down"})
 
-    now = time.time()
+    body = {}
+    try:
+        if request.can_read_body:
+            body = await request.json()
+    except Exception:
+        pass
 
-    # Debounce / rate limit: do not execute if a resync occurred in the past 30 seconds
-    if now - LAST_RESYNC_TIME < 30:
+    force = bool(body.get("force", False))
+    idle_sec = get_idle_duration()
+
+    # If not forced, only trigger if idle duration exceeds 2 hours (7200 seconds)
+    if not force and idle_sec < AUTO_PURGE_IDLE_SECONDS:
+        record_activity("web")
+        return web.json_response({"resynced": False, "reason": "under_2_hours", "idleSeconds": idle_sec})
+
+    now = time.time()
+    # Debounce / rate limit (15s)
+    if now - LAST_RESYNC_TIME < 15 and not force:
         return web.json_response({"resynced": False, "reason": "cooldown"})
 
     # Check state file to ensure music isn't actively playing
     is_playing = False
-    was_silent = True
     if STATE_FILE.exists():
         try:
             with open(STATE_FILE, "r") as f:
                 st = json.load(f)
                 if st.get("status") == "playing":
                     is_playing = True
-                was_silent = st.get("was_silent_session", True)
         except Exception:
             pass
 
-    if is_playing:
+    if is_playing and not force:
+        record_activity("web")
         return web.json_response({"resynced": False, "reason": "already_playing"})
 
     LAST_RESYNC_TIME = now
+    IS_RESYNCING = True
+    RESYNC_MESSAGE = "2 hours of silence & inactivity detected. Resetting OwnTone audio pipeline and reconnecting auto-connect speakers..."
+    record_activity("web")
+
+    # Update STATE_FILE so all connected browser sessions see the reset overlay
+    if STATE_FILE.exists():
+        try:
+            with open(STATE_FILE, "r") as f:
+                st = json.load(f)
+            st["is_resyncing"] = True
+            st["resync_message"] = RESYNC_MESSAGE
+            with open(STATE_FILE, "w") as f:
+                json.dump(st, f)
+        except Exception:
+            pass
 
     # 1. Capture currently selected speakers before restarting OwnTone
     pre_purge_speakers = {}
@@ -1086,26 +1173,15 @@ async def handle_interaction_resync(request):
 
     await loop.run_in_executor(None, _restart_pipeline)
 
-    # Touch signal file so daemon knows was_silent_session is resolved
+    # Touch signal file so daemon knows resync is resolved
     try:
         Path("/tmp/analogair_web_resync").touch()
     except Exception:
         pass
 
-    # Update STATE_FILE to clear was_silent_session
-    if STATE_FILE.exists():
-        try:
-            with open(STATE_FILE, "r") as f:
-                st = json.load(f)
-            st["was_silent_session"] = False
-            st["last_resync_at"] = now
-            with open(STATE_FILE, "w") as f:
-                json.dump(st, f)
-        except Exception:
-            pass
-
     async def _post_restart_resume():
-        await asyncio.sleep(1.8)
+        global IS_RESYNCING, RESYNC_MESSAGE
+        await asyncio.sleep(2.0)
         restored_any = False
         if pre_purge_speakers:
             try:
@@ -1146,12 +1222,26 @@ async def handle_interaction_resync(request):
                     print(f"[AnalogAir Web] Post-interaction speaker reconnect: {err}", flush=True)
 
         await ensure_owntone_playing()
+        IS_RESYNCING = False
+        RESYNC_MESSAGE = ""
+        if STATE_FILE.exists():
+            try:
+                with open(STATE_FILE, "r") as f:
+                    st = json.load(f)
+                st["is_resyncing"] = False
+                st.pop("resync_message", None)
+                st["was_silent_session"] = False
+                st["last_resync_at"] = time.time()
+                with open(STATE_FILE, "w") as f:
+                    json.dump(st, f)
+            except Exception:
+                pass
 
     asyncio.create_task(_post_restart_resume())
-    print("[AnalogAir Web] User interaction triggered resync purge while idle. Buffer cleared & selected speakers reattached.", flush=True)
+    print("[AnalogAir Web] 2-hour inactivity auto-purge executed. Buffer cleared & selected speakers reattached.", flush=True)
     return web.json_response({
         "resynced": True,
-        "message": "Audio buffer purged and selected speakers reattached on user interaction."
+        "message": "2 hours of inactivity detected. OwnTone restarted and auto-connect speakers reconnected."
     })
 
 async def get_owntone_player(request):
@@ -2220,6 +2310,7 @@ def main():
     app.router.add_post('/api/owntone/player/toggle', start_owntone_player)
     app.router.add_post('/api/owntone/purge-buffer', purge_owntone_buffer)
     app.router.add_post('/api/interaction-resync', handle_interaction_resync)
+    app.router.add_post('/api/interaction-ping', handle_interaction_ping)
     app.router.add_get('/stream.mp3', stream_owntone_mp3)
     app.router.add_get('/api/stream.mp3', stream_owntone_mp3)
 

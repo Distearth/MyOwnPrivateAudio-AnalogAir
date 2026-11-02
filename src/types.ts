@@ -17,6 +17,10 @@ export interface NowPlayingState {
   startedAt?: string;
   wasSilentSession?: boolean;
   silenceDurationSeconds?: number;
+  idleSeconds?: number;
+  idleExceeded2Hours?: boolean;
+  isResyncing?: boolean;
+  resyncMessage?: string;
 }
 
 export interface ToneControls {

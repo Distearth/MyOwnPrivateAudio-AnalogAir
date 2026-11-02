@@ -344,6 +344,23 @@ function syncOwnToneArtwork(target: 'standby' | 'album', albumArtUrl?: string) {
   }
 }
 
+const AUTO_PURGE_IDLE_SECONDS = 7200; // 2 hours
+let lastAudioTime = Date.now();
+let lastWebTime = Date.now();
+let isResyncing = false;
+let resyncMessage = '';
+
+function recordActivity(source: 'audio' | 'web' = 'web') {
+  const now = Date.now();
+  if (source === 'audio') lastAudioTime = now;
+  if (source === 'web') lastWebTime = now;
+}
+
+function getIdleSeconds(): number {
+  const lastActive = Math.max(lastAudioTime, lastWebTime);
+  return Math.max(0, (Date.now() - lastActive) / 1000);
+}
+
 // -------------------------------------------------------------
 // REST API ENDPOINTS
 // -------------------------------------------------------------
@@ -351,12 +368,28 @@ function syncOwnToneArtwork(target: 'standby' | 'album', albumArtUrl?: string) {
 // 1. Get Live State
 app.get('/api/state', (req, res) => {
   const selectedDev = AUDIO_DEVICES.find(d => d.id === db.tone.selectedDeviceId) || AUDIO_DEVICES[0];
+  const idleSec = getIdleSeconds();
   res.json({
     ...currentState,
     inputDeviceName: selectedDev.name,
     isContinuous: db.settings.continuousId,
+    idleSeconds: Math.round(idleSec * 10) / 10,
+    idleExceeded2Hours: idleSec >= AUTO_PURGE_IDLE_SECONDS,
+    isResyncing,
+    resyncMessage,
     tone: db.tone,
     settings: db.settings
+  });
+});
+
+// 1.1 Interaction Ping to refresh web activity timestamp
+app.post('/api/interaction-ping', (req, res) => {
+  recordActivity('web');
+  const idleSec = getIdleSeconds();
+  res.json({
+    success: true,
+    idleSeconds: Math.round(idleSec * 10) / 10,
+    idleExceeded2Hours: idleSec >= AUTO_PURGE_IDLE_SECONDS
   });
 });
 
@@ -1085,32 +1118,46 @@ app.post('/api/owntone/purge-buffer', (req, res) => {
 });
 
 // User Interaction Triggered Resync
-// Pre-arms OwnTone buffers & restores selected speakers when user interacts with the web UI after silence
+// Executes auto-purge & restarts OwnTone after >= 2 hours of inactivity (no audio and no web interaction)
 let lastServerInteractionResync = 0;
 app.post('/api/interaction-resync', (req, res) => {
-  const now = Date.now();
-  if (currentState.status === 'playing') {
-    return res.json({ resynced: false, reason: 'already_playing' });
+  const force = Boolean(req.body?.force);
+  const idleSec = getIdleSeconds();
+
+  if (!force && idleSec < AUTO_PURGE_IDLE_SECONDS) {
+    recordActivity('web');
+    return res.json({ resynced: false, reason: 'under_2_hours', idleSeconds: idleSec });
   }
-  if (now - lastServerInteractionResync < 30000) {
+
+  const now = Date.now();
+  if (!force && now - lastServerInteractionResync < 15000) {
     return res.json({ resynced: false, reason: 'cooldown' });
   }
 
   lastServerInteractionResync = now;
+  isResyncing = true;
+  resyncMessage = '2 hours of silence & inactivity detected. Resetting OwnTone audio pipeline and reconnecting auto-connect speakers...';
+  recordActivity('web');
+
   const selectedBeforePurge = owntoneOutputs.filter(o => o.selected).map(o => String(o.id));
   const toRestore = selectedBeforePurge.length > 0
     ? selectedBeforePurge
     : (Array.isArray(db.autoConnectSpeakers) ? db.autoConnectSpeakers.map(String) : []);
 
-  for (const out of owntoneOutputs) {
-    if (toRestore.includes(String(out.id))) {
-      out.selected = true;
+  setTimeout(() => {
+    for (const out of owntoneOutputs) {
+      if (toRestore.includes(String(out.id))) {
+        out.selected = true;
+      }
     }
-  }
-  currentState.wasSilentSession = false;
+    currentState.wasSilentSession = false;
+    isResyncing = false;
+    resyncMessage = '';
+  }, 2200);
+
   res.json({ 
     resynced: true, 
-    message: 'Audio buffer purged and selected speakers armed on user interaction.' 
+    message: '2 hours of inactivity detected. OwnTone restarted and auto-connect speakers reconnected.' 
   });
 });
 
