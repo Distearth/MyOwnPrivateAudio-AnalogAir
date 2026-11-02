@@ -1257,9 +1257,19 @@ app.post('/api/system/power', (req, res) => {
   if (action === 'shutdown' || action === 'reboot') {
     console.log(`[AnalogAir] ${action === 'shutdown' ? 'Immediate shutdown' : 'Reboot'} requested. Killing network connections and halting cleanly...`);
 
+    // Cleanly deselect all outputs so no outputs remain selected in memory or on reboot
+    for (const out of owntoneOutputs) {
+      out.selected = false;
+    }
+    try {
+      if (fs.existsSync('/tmp/analogair_last_speakers.json')) {
+        fs.unlinkSync('/tmp/analogair_last_speakers.json');
+      }
+    } catch {}
+
     setTimeout(() => {
       const { exec } = require('child_process');
-      const preShutdownCmd = 'sudo /usr/local/bin/analogair-pre-shutdown.sh 2>/dev/null || (sudo iptables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null; sudo iptables -I OUTPUT 2 -j DROP 2>/dev/null; for dev in /sys/class/net/*; do d=$(basename $dev); [ "$d" != "lo" ] && sudo ip link set $d down 2>/dev/null; done; sudo pkill -9 -f analogair_daemon.py 2>/dev/null; sudo pkill -9 -f analogair_capture.py 2>/dev/null; sudo pkill -9 owntone 2>/dev/null; sudo pkill -9 avahi-daemon 2>/dev/null)';
+      const preShutdownCmd = 'sudo /usr/local/bin/analogair-pre-shutdown.sh 2>/dev/null || (curl -s -X PUT http://127.0.0.1:3689/api/player/stop 2>/dev/null; sudo iptables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null; sudo iptables -I OUTPUT 2 -j DROP 2>/dev/null; for dev in /sys/class/net/*; do d=$(basename $dev); [ "$d" != "lo" ] && sudo ip link set $d down 2>/dev/null; done; sudo pkill -9 -f analogair_daemon.py 2>/dev/null; sudo pkill -9 -f analogair_capture.py 2>/dev/null; sudo pkill -9 owntone 2>/dev/null; sudo pkill -9 avahi-daemon 2>/dev/null)';
       exec(preShutdownCmd, () => {
         if (action === 'shutdown') {
           exec('sudo systemctl poweroff 2>/dev/null || sudo shutdown -h now 2>/dev/null');

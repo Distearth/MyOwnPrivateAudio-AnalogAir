@@ -60,6 +60,7 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    cursor.execute("DROP TABLE IF EXISTS last_active_speakers")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS release_overrides (
             track_key TEXT PRIMARY KEY,
@@ -472,26 +473,21 @@ def get_currently_selected_speakers():
     return selected
 
 def save_last_active_speakers(speakers_dict):
-    """Persists last active speaker state to /tmp/analogair_last_speakers.json and DB."""
+    """
+    Persists last active speaker state ONLY to ephemeral /tmp/analogair_last_speakers.json.
+    Never persists to SQLite so non-auto-connect speakers never persist across system reboots.
+    """
     try:
         with open(LAST_SPEAKERS_FILE, "w") as f:
             json.dump(speakers_dict, f)
     except Exception:
         pass
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("CREATE TABLE IF NOT EXISTS last_active_speakers (speaker_id TEXT PRIMARY KEY, volume INTEGER)")
-        c.execute("DELETE FROM last_active_speakers")
-        for sid, vol in speakers_dict.items():
-            c.execute("INSERT OR REPLACE INTO last_active_speakers (speaker_id, volume) VALUES (?, ?)", (str(sid), int(vol)))
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
 
 def get_last_active_speakers():
-    """Loads last active speakers from file or database."""
+    """
+    Loads last active speakers ONLY from ephemeral /tmp file.
+    Returns empty dict if file does not exist (e.g. after fresh boot).
+    """
     speakers = {}
     try:
         if os.path.exists(LAST_SPEAKERS_FILE):
@@ -499,16 +495,6 @@ def get_last_active_speakers():
                 data = json.load(f)
                 if isinstance(data, dict):
                     return {str(k): int(v) for k, v in data.items()}
-    except Exception:
-        pass
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("CREATE TABLE IF NOT EXISTS last_active_speakers (speaker_id TEXT PRIMARY KEY, volume INTEGER)")
-        c.execute("SELECT speaker_id, volume FROM last_active_speakers")
-        for row in c.fetchall():
-            speakers[str(row[0])] = int(row[1]) if row[1] is not None else 100
-        conn.close()
     except Exception:
         pass
     return speakers

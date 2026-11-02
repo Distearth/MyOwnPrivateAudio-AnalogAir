@@ -82,11 +82,14 @@ def sanitize_track_title(title: str) -> str:
     cleaned = cleaned.strip(" -–—()[]").strip()
     return cleaned if cleaned else title
 
+IS_SHUTTING_DOWN = False
+
 def init_db():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with get_db() as conn:
         c = conn.cursor()
         c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+        c.execute("DROP TABLE IF EXISTS last_active_speakers")
         c.execute("""
             CREATE TABLE IF NOT EXISTS release_overrides (
                 track_key TEXT PRIMARY KEY,
@@ -832,7 +835,7 @@ async def ensure_owntone_playing():
 LAST_SPEAKERS_FILE = Path("/tmp/analogair_last_speakers.json")
 
 def get_last_active_speakers():
-    """Loads last active speakers from file or database."""
+    """Loads last active speakers ONLY from ephemeral /tmp file. Returns {} after reboot."""
     speakers = {}
     try:
         if LAST_SPEAKERS_FILE.exists():
@@ -842,29 +845,13 @@ def get_last_active_speakers():
                     return {str(k): int(v) for k, v in data.items()}
     except Exception:
         pass
-    try:
-        with get_db() as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS last_active_speakers (speaker_id TEXT PRIMARY KEY, volume INTEGER)")
-            for row in conn.execute("SELECT speaker_id, volume FROM last_active_speakers"):
-                speakers[str(row["speaker_id"])] = int(row["volume"]) if row["volume"] is not None else 100
-    except Exception:
-        pass
     return speakers
 
 def save_last_active_speakers(speakers_dict):
-    """Persists last active speaker state to file and DB."""
+    """Persists last active speaker state ONLY to ephemeral /tmp file."""
     try:
         with open(LAST_SPEAKERS_FILE, "w") as f:
             json.dump(speakers_dict, f)
-    except Exception:
-        pass
-    try:
-        with get_db() as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS last_active_speakers (speaker_id TEXT PRIMARY KEY, volume INTEGER)")
-            conn.execute("DELETE FROM last_active_speakers")
-            for sid, vol in speakers_dict.items():
-                conn.execute("INSERT OR REPLACE INTO last_active_speakers (speaker_id, volume) VALUES (?, ?)", (str(sid), int(vol)))
-            conn.commit()
     except Exception:
         pass
 
@@ -999,7 +986,10 @@ async def handle_interaction_resync(request):
     If the system has been in silence / standby (was_silent_session is True or status == 'idle'),
     this triggers the exact same resync purge and restores the last active speakers.
     """
-    global LAST_RESYNC_TIME
+    global LAST_RESYNC_TIME, IS_SHUTTING_DOWN
+    if IS_SHUTTING_DOWN:
+        return web.json_response({"resynced": False, "reason": "shutting_down"})
+
     now = time.time()
 
     # Debounce / rate limit: do not execute if a resync occurred in the past 30 seconds
@@ -1860,9 +1850,34 @@ async def save_settings(request):
 
 # --- 7b. System Power Management ---
 async def _execute_clean_power(action: str):
-    await asyncio.sleep(0.3)
+    global IS_SHUTTING_DOWN
+    IS_SHUTTING_DOWN = True
+
+    # 1. Clear ephemeral speaker states so next boot starts with a clean slate
+    if LAST_SPEAKERS_FILE.exists():
+        try:
+            LAST_SPEAKERS_FILE.unlink()
+        except Exception:
+            pass
+
+    # 2. Cleanly stop OwnTone player and DESELECT ALL OUTPUTS in OwnTone's DB
     try:
-        # 1. Run dedicated pre-shutdown network killer script FIRST
+        async with aiohttp.ClientSession() as session:
+            await session.put(f"{OWNTONE_BASE}/api/player/stop", timeout=1.5)
+            async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=2) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    for o in data.get("outputs", []):
+                        if o.get("selected", False):
+                            oid = str(o.get("id"))
+                            await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": False}, timeout=1.5)
+    except Exception as e:
+        print(f"[AnalogAir Web] Pre-shutdown output deselect error: {e}", flush=True)
+
+    await asyncio.sleep(0.3)
+
+    try:
+        # 3. Run dedicated pre-shutdown network killer script FIRST
         # This cuts network interfaces, drops outbound traffic, and kills daemon loops
         # BEFORE OwnTone can send AirPlay packets or wake up receivers.
         pre_shutdown_script = Path("/usr/local/bin/analogair-pre-shutdown.sh")
@@ -1885,7 +1900,7 @@ async def _execute_clean_power(action: str):
     except Exception as e:
         print(f"[AnalogAir Web] Pre-power network kill error: {e}", flush=True)
 
-    # 2. Trigger clean poweroff or reboot
+    # 4. Trigger clean poweroff or reboot
     if action == "shutdown":
         subprocess.Popen(["sudo", "systemctl", "poweroff"])
     else:
@@ -2080,7 +2095,14 @@ async def serve_static_or_spa(request):
 
 # --- 12. Auto-Connect Startup Speakers ---
 async def auto_connect_startup_speakers(app):
-    for delay in [3, 5, 7]:
+    # Clear any ephemeral last active speakers file from prior sessions
+    if LAST_SPEAKERS_FILE.exists():
+        try:
+            LAST_SPEAKERS_FILE.unlink()
+        except Exception:
+            pass
+
+    for delay in [2, 4, 6]:
         await asyncio.sleep(delay)
         auto_ids = set()
         with get_db() as conn:
@@ -2091,17 +2113,23 @@ async def auto_connect_startup_speakers(app):
             except Exception:
                 pass
 
-        if not auto_ids:
-            break
-
-        all_autos_active = True
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(f"{OWNTONE_BASE}/api/outputs", timeout=3) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         outputs = data.get("outputs", [])
+
+                        # 1. Force deselect any output that is selected in OwnTone but NOT marked for auto-connect
+                        for o in outputs:
+                            oid = str(o.get("id"))
+                            if oid not in auto_ids and o.get("selected", False):
+                                await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": False}, timeout=2)
+                                print(f"[AnalogAir Web] Deselected unrequested startup speaker: {o.get('name')}", flush=True)
+
+                        # 2. Connect only designated auto-connect speakers
                         found_autos = set()
+                        all_autos_active = True
                         for o in outputs:
                             oid = str(o.get("id"))
                             if oid in auto_ids:
@@ -2110,8 +2138,12 @@ async def auto_connect_startup_speakers(app):
                                     all_autos_active = False
                                     await session.put(f"{OWNTONE_BASE}/api/outputs/{oid}", json={"selected": True, "volume": 100}, timeout=2)
                                     print(f"[AnalogAir Web] Auto-connected startup speaker: {o.get('name')}", flush=True)
-                        if auto_ids.issubset(found_autos) and all_autos_active:
+
+                        if auto_ids and auto_ids.issubset(found_autos) and all_autos_active:
                             await ensure_owntone_playing()
+                            break
+                        elif not auto_ids:
+                            # No auto-connect speakers configured: all non-auto speakers confirmed deselected
                             break
             except Exception as e:
                 print(f"[AnalogAir Web] Speaker auto-connect check: {e}", flush=True)

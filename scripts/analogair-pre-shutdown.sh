@@ -14,7 +14,21 @@ if [ -f "$PIDFILE" ]; then
 fi
 touch "$PIDFILE" 2>/dev/null || true
 
-echo "[AnalogAir] Pre-shutdown: Severing all network links FIRST to prevent speaker reconnect..."
+# 0. Cleanly deselect all OwnTone outputs and stop player via localhost API
+# This ensures OwnTone's SQLite database (/var/cache/owntone/songs3.db) records selected=0 for all speakers
+curl -s -X PUT http://127.0.0.1:3689/api/player/stop --connect-timeout 1 --max-time 1 2>/dev/null || true
+OUTPUTS_JSON=$(curl -s http://127.0.0.1:3689/api/outputs --connect-timeout 1 --max-time 2 2>/dev/null || echo "")
+if [ -n "$OUTPUTS_JSON" ]; then
+    for oid in $(echo "$OUTPUTS_JSON" | grep -o '"id":[0-9]*' | cut -d: -f2); do
+        curl -s -X PUT -H "Content-Type: application/json" -d '{"selected":false}' "http://127.0.0.1:3689/api/outputs/$oid" --connect-timeout 1 --max-time 1 2>/dev/null || true
+    done
+fi
+rm -f /tmp/analogair_last_speakers.json /tmp/analogair_web_resync 2>/dev/null || true
+for db in /home/*/.config/analogair/settings.db /root/.config/analogair/settings.db; do
+    if [ -f "$db" ]; then
+        sqlite3 "$db" "DROP TABLE IF EXISTS last_active_speakers;" 2>/dev/null || true
+    fi
+done
 
 # 1. Drop all non-loopback outbound traffic via iptables immediately
 # Prevents any packet from reaching AirPlay speakers, AVRs, or the LAN

@@ -189,11 +189,16 @@ export default function App() {
     }
   }, []);
 
-  // Trigger resync and pre-arm auto-connect speakers when user interacts after silence
+  const isControlsOpenRef = useRef(isControlsOpen);
+  useEffect(() => {
+    isControlsOpenRef.current = isControlsOpen;
+  }, [isControlsOpen]);
+
+  // Trigger resync and pre-arm auto-connect speakers when user wakes the screen after silence
   const lastInteractionResyncRef = useRef<number>(0);
   const checkAndTriggerInteractionResync = useCallback(async () => {
-    // Never interrupt active music playback
-    if (stateRef.current.status === 'playing') return;
+    // Never interrupt active music playback or when controls/power menus are open
+    if (stateRef.current.status === 'playing' || isControlsOpenRef.current) return;
 
     const now = Date.now();
     // Debounce to at most once every 30 seconds
@@ -217,11 +222,16 @@ export default function App() {
     }
   }, [fetchOutputs, fetchState]);
 
-  // Track user interaction to reset OLED burn-in dimmer and trigger resync if idle
+  // Track user interaction to reset OLED burn-in dimmer timestamp
   const recordActivity = useCallback(() => {
     setLastActivityTimestamp(Date.now());
+  }, []);
+
+  // When waking up the screen from OLED dimmed sleep, record activity and trigger audio resync
+  const handleDimmerWake = useCallback(() => {
+    recordActivity();
     checkAndTriggerInteractionResync();
-  }, [checkAndTriggerInteractionResync]);
+  }, [recordActivity, checkAndTriggerInteractionResync]);
 
   useEffect(() => {
     window.addEventListener('mousemove', recordActivity);
@@ -232,9 +242,6 @@ export default function App() {
     window.addEventListener('focus', recordActivity);
     document.addEventListener('visibilitychange', recordActivity);
 
-    // Initial check upon page load/mount
-    checkAndTriggerInteractionResync();
-
     return () => {
       window.removeEventListener('mousemove', recordActivity);
       window.removeEventListener('mousedown', recordActivity);
@@ -244,7 +251,7 @@ export default function App() {
       window.removeEventListener('focus', recordActivity);
       document.removeEventListener('visibilitychange', recordActivity);
     };
-  }, [recordActivity, checkAndTriggerInteractionResync]);
+  }, [recordActivity]);
 
   // Polling loop
   useEffect(() => {
@@ -480,7 +487,7 @@ export default function App() {
         dimMinutes={settings.dimMinutes}
         lastActivityTimestamp={lastActivityTimestamp}
         currentTrackKey={`${state.artist} - ${state.album}`}
-        onWake={recordActivity}
+        onWake={handleDimmerWake}
       />
 
       {/* 5. Pre-Arm Resync Floating Notification */}
